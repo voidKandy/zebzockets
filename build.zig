@@ -40,6 +40,9 @@ pub fn build(b: *std.Build) void {
     const client_exe = b.addRunArtifact(client);
     const run_client_step = b.step("run_client", "Run client");
     run_client_step.dependOn(&client_exe.step);
+    if (b.args) |args| {
+        client_exe.addArgs(args);
+    }
 
     const build_client_step = b.step("client", "Build client");
     build_client_step.dependOn(&client.step);
@@ -57,6 +60,9 @@ pub fn build(b: *std.Build) void {
     const server_exe = b.addRunArtifact(server);
     const run_server_step = b.step("run_server", "Run server");
     run_server_step.dependOn(&server_exe.step);
+    if (b.args) |args| {
+        server_exe.addArgs(args);
+    }
 
     const build_server_step = b.step("server", "Build server");
     build_server_step.dependOn(&server.step);
