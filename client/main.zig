@@ -32,29 +32,38 @@ pub fn main() !void {
     defer stream.close();
     print("Connecting to {}\n", .{peer});
 
-    // Sending data to peer
-    var handshake = try Handshake.init("/chat", "dGhlIHNhbXBsZSBub25jZQ==", "127.0.0.1", "http://www.example.com", allocator);
+    const handshake_cfg = Handshake.Config{ .key = "dGhlIHNhbXBsZSBub25jZQ==", .endpoint = "/chat", .host = "127.0.0.1", .origin = "http://example.com" };
+    var handshake = try Handshake.init(handshake_cfg, allocator);
     defer handshake.deinit();
     const body =
         try handshake.body();
     defer body.deinit();
     var writer = stream.writer();
     const size = try writer.write(body.items);
-    print("Sending '{s}' to peer, total written: {d} bytes\n", .{ body, size });
+    print("Sending '{s}' to peer, total written: {d} bytes\n", .{ body.items, size });
     // Or just using `writer.writeAll`
     // try writer.writeAll("hello zig");
 }
+
 const Handshake = struct {
-    headers: std.StringHashMap([]const u8),
+    const Config = struct {
+        key: []const u8,
+        endpoint: []const u8,
+        host: []const u8,
+        origin: []const u8,
+    };
+    const HeaderMap =
+        std.StringHashMap([]const u8);
+    headers: HeaderMap,
     endpoint: []const u8,
     allocator: std.mem.Allocator,
     const Self = @This();
 
-    fn init(endpoint: []const u8, key: []const u8, host: []const u8, origin: []const u8, allocator: std.mem.Allocator) !Self {
-        var headers = std.StringHashMap([]const u8).init(allocator);
-        try headers.put("Host", host);
-        try headers.put("Origin", origin);
-        try headers.put("Sec-WebSocket-Key", key);
+    fn init(config: Self.Config, allocator: std.mem.Allocator) !Self {
+        var headers = Self.HeaderMap.init(allocator);
+        try headers.put("Host", config.host);
+        try headers.put("Origin", config.origin);
+        try headers.put("Sec-WebSocket-Key", config.key);
         try headers.put("Upgrade", "websocket");
         try headers.put("Connection", "Upgrade");
         // this might need to be configurable
@@ -62,7 +71,7 @@ const Handshake = struct {
         try headers.put("Sec-WebSocket-Protocol", "chat, superchat");
         return Handshake{
             .headers = headers,
-            .endpoint = endpoint,
+            .endpoint = config.endpoint,
             .allocator = allocator,
         };
     }
@@ -77,7 +86,7 @@ const Handshake = struct {
         var buffer = std.ArrayList(u8).init(self.allocator);
         try buffer.appendSlice("GET ");
         try buffer.appendSlice(self.endpoint);
-        try buffer.appendSlice("HTTP/1.1 ");
+        try buffer.appendSlice(" HTTP/1.1 ");
         var headers_iter =
             self.headers.iterator();
         while (headers_iter.next()) |entry| {
