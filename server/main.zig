@@ -4,6 +4,7 @@
 //! echo "hello zig" | nc localhost <port>
 
 const std = @import("std");
+const websockets = @import("websockets");
 const net = std.net;
 const print = std.debug.print;
 const assert = std.debug.assert;
@@ -23,6 +24,10 @@ const usage =
 ;
 
 pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
     var args = std.process.args();
     assert(args.skip());
 
@@ -35,31 +40,9 @@ pub fn main() !void {
         print("{s}", .{usage});
         return;
     }
-    var split = std.mem.split(u8, first_arg, ":");
-    const host = blk: {
-        const first = split.first();
-        if (first.len == 0) {
-            break :blk default_host;
-        } else {
-            break :blk first;
-        }
-    };
-    const port: u16 = blk: {
-        const next = split.next() orelse break :blk default_port;
-        if (next.len != 0) {
-            break :blk std.fmt.parseInt(u16, next, 10) catch |err| {
-                std.debug.panic("could not parse port {s} to int: {any}\n", .{ next, err });
-            };
-        } else {
-            break :blk default_port;
-        }
-    };
+    const info = websockets.connection_information(first_arg);
+    const loopback = try std.net.Ip4Address.parse(info.host, info.port);
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    const loopback = try net.Ip4Address.parse(host, port);
     const localhost = net.Address{ .in = loopback };
     var server = try localhost.listen(.{
         .reuse_address = true,
@@ -67,7 +50,7 @@ pub fn main() !void {
     defer server.deinit();
 
     const addr = server.listen_address;
-    print("Listening on {s}:{}, access this port to end the program\n", .{ host, addr.getPort() });
+    print("Listening on {s}:{}, access this port to end the program\n", .{ info.host, addr.getPort() });
 
     var client = try server.accept();
     defer client.stream.close();

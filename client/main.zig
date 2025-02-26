@@ -1,10 +1,9 @@
 const std = @import("std");
+const websockets = @import("websockets");
 const net = std.net;
 const print = std.debug.print;
 const assert = std.debug.assert;
 
-const default_host = "127.0.0.1";
-const default_port = 6000;
 const usage =
     \\ usage: <binary-name> [<host>:<port>]|--help
     \\ To use default host and port values simply pass ':'
@@ -23,33 +22,24 @@ pub fn main() !void {
         print("{s}", .{usage});
         return;
     }
-    var split = std.mem.split(u8, first_arg, ":");
-    const host = blk: {
-        const first = split.first();
-        if (first.len == 0) {
-            break :blk default_host;
-        } else {
-            break :blk first;
-        }
-    };
-    const port: u16 = blk: {
-        const next = split.next() orelse break :blk default_port;
-        if (next.len != 0) {
-            break :blk std.fmt.parseInt(u16, next, 10) catch |err| {
-                std.debug.panic("could not parse port {s} to int: {any}\n", .{ next, err });
-            };
-        } else {
-            break :blk default_port;
-        }
-    };
-
-    const peer = try net.Address.parseIp4(host, port);
+    const info = websockets.connection_information(first_arg);
+    const peer = try std.net.Address.parseIp4(info.host, info.port);
     // Connect to peer
     const stream = try net.tcpConnectToAddress(peer);
     defer stream.close();
     print("Connecting to {}\n", .{peer});
 
     // Sending data to peer
+    _ =
+        \\ GET /chat HTTP/1.1
+        \\ Host: server.example.com
+        \\ Upgrade: websocket
+        \\ Connection: Upgrade
+        \\ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+        \\ Origin: http://example.com
+        \\ Sec-WebSocket-Protocol: chat, superchat
+        \\ Sec-WebSocket-Version: 13
+    ;
     const data = "hello zig";
     var writer = stream.writer();
     const size = try writer.write(data);

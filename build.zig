@@ -36,6 +36,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    client.root_module.addImport("websockets", &lib.root_module);
     b.installArtifact(client);
     const client_exe = b.addRunArtifact(client);
     const run_client_step = b.step("run_client", "Run client");
@@ -56,6 +57,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    server.root_module.addImport("websockets", &lib.root_module);
     b.installArtifact(server);
     const server_exe = b.addRunArtifact(server);
     const run_server_step = b.step("run_server", "Run server");
