@@ -10,6 +10,9 @@ pub const ConnectionInfo = struct {
     host: []const u8,
     port: u16,
 };
+/// Assumes the `arg` passed is formatted as follows:
+/// \<host\>:\<port\>
+/// If either `host` or `port` are missing, replaces them with default values
 pub fn connection_information(arg: []const u8) ConnectionInfo {
     var split = std.mem.split(u8, arg, ":");
     const host = blk: {

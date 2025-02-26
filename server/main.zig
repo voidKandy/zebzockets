@@ -16,8 +16,6 @@ const assert = std.debug.assert;
 //   <binary> :3000 will use the default host
 //   <binary> 192.5.8.65: will use the default port
 
-const default_host = "127.0.0.1";
-const default_port = 6000;
 const usage =
     \\ usage: <binary-name> [<host>:<port>]|--help
     \\ To use default host and port values simply pass ':'
