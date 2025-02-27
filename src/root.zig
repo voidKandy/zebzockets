@@ -69,21 +69,6 @@ const Tag = enum { host, origin, key, version, protocol, accept };
 /// Any headers that the WS protocol expects can be defined here
 /// Connection and Upgrade headers are not included because they can only be of a single value
 pub const ExpectedHeader = union(Tag) {
-    fn Inner(
-        comptime KeyStr: []const u8,
-    ) type {
-        return struct {
-            const Self = @This();
-            val: []const u8,
-            fn key(self: Self) []const u8 {
-                _ = self;
-                return KeyStr;
-            }
-            fn new(val: []const u8) Self {
-                return Self{ .val = val };
-            }
-        };
-    }
     host: Host,
     /// Used to protect against unauthorized cross-origin use of a WebSocket server by scripts using the WebSocket API in a web browser.
     /// This header field is sent by browser clients; for non-browser clients, this header field may be sent if it makes sense in the context of those clients.
@@ -102,6 +87,23 @@ pub const ExpectedHeader = union(Tag) {
     const Protocol = ExpectedHeader.Inner("Sec-WebSocket-Protocol");
     const Accept = ExpectedHeader.Inner("Sec-WebSocket-Accept");
 
+    fn Inner(
+        comptime KeyStr: []const u8,
+    ) type {
+        return struct {
+            const MyKey = KeyStr;
+            const Self = @This();
+            val: []const u8,
+            // for runtime access of KeyStr from instance
+            fn key(self: Self) []const u8 {
+                _ = self;
+                return KeyStr;
+            }
+            fn new(val: []const u8) Self {
+                return Self{ .val = val };
+            }
+        };
+    }
     /// Expects `field` to be an `ExpectedHeader.Inner`, will panic Otherwise
     fn from(comptime field: type, val: []const u8) ExpectedHeader {
         inline for (@typeInfo(ExpectedHeader).Union.fields) |f| {
@@ -123,6 +125,18 @@ pub const ExpectedHeader = union(Tag) {
         };
 
         return map.put(info.key, info.val);
+    }
+
+    pub fn all_in_header_map(map: HeaderMap, allocator: std.mem.Allocator) std.mem.Allocator.Error!std.ArrayList(ExpectedHeader) {
+        var all = std.ArrayList(ExpectedHeader).init(allocator);
+        inline for (@typeInfo(ExpectedHeader).Union.fields) |f| {
+            const k = f.type.MyKey;
+            if (map.get(k)) |v| {
+                try all.append(ExpectedHeader.from(f.type, v));
+            }
+        }
+
+        return all;
     }
 };
 /// It contains everything you need for rendering a piece of HTML
@@ -313,4 +327,86 @@ test "parse method" {
     const get_method = Method.parse(get) orelse std.debug.panic("Failed to parse get method", .{});
     try std.testing.expectEqual(Method.get, get_method);
     std.debug.print("METHOD PARSING PASSED\n", .{});
+}
+
+test "all in header map" {
+    const allocator = std.testing.allocator;
+    const headers: [4]ExpectedHeader =
+        .{
+        ExpectedHeader.from(ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
+        ExpectedHeader.from(ExpectedHeader.Host, "127.0.0.1"),
+        ExpectedHeader.from(ExpectedHeader.Version, "13"),
+        ExpectedHeader.from(ExpectedHeader.Protocol, "chat, superchat"),
+    };
+    var handshake = try ClientHandshake.init_with_headers("/chat", &headers, allocator);
+    defer handshake.deinit();
+
+    const all = try ExpectedHeader.all_in_header_map(handshake.headers, allocator);
+    defer all.deinit();
+    // if (all.items.len != headers.len) {
+    //     std.debug.panic("len not equal!\n", .{});
+    // }
+
+    for (headers) |h_item| {
+        var found = false;
+
+        for (all.items) |item| {
+            switch (h_item) {
+                .host => |_| {
+                    switch (item) {
+                        .host => {
+                            found = true;
+                        },
+                        else => {},
+                    }
+                },
+                .origin => |_| {
+                    switch (item) {
+                        .origin => {
+                            found = true;
+                        },
+                        else => {},
+                    }
+                },
+                .key => |_| {
+                    switch (item) {
+                        .key => {
+                            found = true;
+                        },
+                        else => {},
+                    }
+                },
+                .version => |_| {
+                    switch (item) {
+                        .version => {
+                            found = true;
+                        },
+                        else => {},
+                    }
+                },
+                .protocol => |_| {
+                    switch (item) {
+                        .protocol => {
+                            found = true;
+                        },
+                        else => {},
+                    }
+                },
+                .accept => |_| {
+                    switch (item) {
+                        .accept => {
+                            found = true;
+                        },
+                        else => {},
+                    }
+                },
+            }
+        }
+
+        if (!found) {
+            std.debug.panic("expected to find header: {any}", .{h_item});
+        }
+    }
+
+    std.debug.print("ALL IN HEADERS PASSED\n", .{});
 }
