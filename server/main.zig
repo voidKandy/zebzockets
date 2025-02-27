@@ -62,11 +62,26 @@ pub fn main() !void {
 }
 
 pub const ServerHandshake = struct {
+    // there must be some better way of creating configs
+    const Config = struct {
+        accept: []const u8,
+        protocol: []const u8,
+        const PROTOCOL = "Sec-WebSocket-Protocol";
+        const ACCEPT = "Sec-WebSocket-Accept";
+    };
     headers: zebzockets.HeaderMap,
+    arena: std.heap.ArenaAllocator,
     const Self = @This();
 
-    fn from_client_handshake(client_hs: zebzockets.ClientHandshake) !Self {
-        _ = client_hs;
+    fn from_client_handshake(client_hs: zebzockets.ClientHandshake, allocator: std.mem.Allocator) !Self {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        const cfg = try zebzockets.ClientHandshake.Config.from_header_map(client_hs.headers);
+
+        const hashed = try hash_key(arena.allocator(), cfg.key);
+        const base64 = try base64_encode_digest(arena.allocator(), hashed);
+        _ = base64;
+
+        // _ = client_hs;
     }
 };
 const Sha1 = std.crypto.hash.Sha1;

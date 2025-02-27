@@ -63,41 +63,70 @@ const Method = enum {
     }
 };
 
-const HeaderMap =
+pub const HeaderMap =
     std.StringArrayHashMap([]const u8);
-pub const ClientHandshake = struct {
-    /// Used to populate required headers AFTER initialization
-    pub const Config = struct {
-        /// Base-64 encoded string that the server concatenates with a Globally Unique Identifier
-        /// This concatenated string is then Sha-1 hashed, Base-64 encoded and returned to the client
-        key: []const u8,
-        host: []const u8,
-        /// Used to protect against unauthorized cross-origin use of a WebSocket server by scripts using the WebSocket API in a web browser.
-        /// This header field is sent by browser clients; for non-browser clients, this header field may be sent if it makes sense in the context of those clients.
-        origin: ?[]const u8,
-        version: []const u8,
-        subprotocol: []const u8,
+const Tag = enum { host, origin, key, version, protocol, accept };
+/// Any headers that the WS protocol expects can be defined here
+/// Connection and Upgrade headers are not included because they can only be of a single value
+pub const ExpectedHeader = union(Tag) {
+    fn Inner(
+        comptime KeyStr: []const u8,
+    ) type {
+        return struct {
+            const Self = @This();
+            val: []const u8,
+            fn key(self: Self) []const u8 {
+                _ = self;
+                return KeyStr;
+            }
+            fn new(val: []const u8) Self {
+                return Self{ .val = val };
+            }
+        };
+    }
+    host: Host,
+    /// Used to protect against unauthorized cross-origin use of a WebSocket server by scripts using the WebSocket API in a web browser.
+    /// This header field is sent by browser clients; for non-browser clients, this header field may be sent if it makes sense in the context of those clients.
+    origin: Origin,
+    /// Base-64 encoded string that the server concatenates with a Globally Unique Identifier
+    /// This concatenated string is then Sha-1 hashed, Base-64 encoded and returned to the client
+    key: Key,
+    version: Version,
+    protocol: Protocol,
+    accept: Accept,
 
-        const HOST = "Host";
-        const ORIGIN = "Origin";
-        const KEY = "Sec-WebSocket-Key";
-        const VERSION = "Sec-WebSocket-Version";
-        const PROTOCOLS = "Sec-WebSocket-Protocol";
-        pub fn from_header_map(map: HeaderMap) !Config {
-            const host = map.get(Config.HOST) orelse return error.NoHost;
-            const origin = map.get(Config.ORIGIN);
-            const key = map.get(Config.KEY) orelse return error.NoKey;
-            const version = map.get(Config.VERSION) orelse return error.NoVersion;
-            const protocols = map.get(Config.PROTOCOLS) orelse return error.NoProtocol;
-            return Config{
-                .host = host,
-                .origin = origin,
-                .key = key,
-                .version = version,
-                .protocols = protocols,
-            };
+    const Host = ExpectedHeader.Inner("Host");
+    const Origin = ExpectedHeader.Inner("Origin");
+    const Key = ExpectedHeader.Inner("Sec-WebSocket-Key");
+    const Version = ExpectedHeader.Inner("Sec-WebSocket-Version");
+    const Protocol = ExpectedHeader.Inner("Sec-WebSocket-Protocol");
+    const Accept = ExpectedHeader.Inner("Sec-WebSocket-Accept");
+
+    /// Expects `field` to be an `ExpectedHeader.Inner`, will panic Otherwise
+    fn from(comptime field: type, val: []const u8) ExpectedHeader {
+        inline for (@typeInfo(ExpectedHeader).Union.fields) |f| {
+            if (f.type == field) {
+                const v = field.new(val);
+                return @unionInit(ExpectedHeader, f.name, v);
+            }
         }
-    };
+    }
+
+    pub fn put(self: ExpectedHeader, map: *HeaderMap) !void {
+        const info = switch (self) {
+            .host => |f| .{ .key = f.key(), .val = f.val },
+            .origin => |f| .{ .key = f.key(), .val = f.val },
+            .key => |f| .{ .key = f.key(), .val = f.val },
+            .version => |f| .{ .key = f.key(), .val = f.val },
+            .protocol => |f| .{ .key = f.key(), .val = f.val },
+            .accept => |f| .{ .key = f.key(), .val = f.val },
+        };
+
+        return map.put(info.key, info.val);
+    }
+};
+/// It contains everything you need for rendering a piece of HTML
+pub const ClientHandshake = struct {
     headers: HeaderMap,
     endpoint: []const u8,
     arena: std.heap.ArenaAllocator,
@@ -105,27 +134,21 @@ pub const ClientHandshake = struct {
 
     pub fn init(endpoint: []const u8, allocator: std.mem.Allocator) !Self {
         var arena = std.heap.ArenaAllocator.init(allocator);
-
         var headers = HeaderMap.init(arena.allocator());
         try headers.put("Upgrade", "websocket");
         try headers.put("Connection", "Upgrade");
-        // this might need to be configurable
-
         return Self{
             .headers = headers,
             .endpoint = endpoint,
             .arena = arena,
         };
     }
-
-    pub fn populate_config_headers(self: *Self, config: Self.Config) !void {
-        try self.headers.put(Config.HOST, config.host);
-        if (config.origin) |origin| {
-            try self.headers.put(Config.ORIGIN, origin);
+    pub fn init_with_headers(endpoint: []const u8, insert_headers: []const ExpectedHeader, allocator: std.mem.Allocator) !Self {
+        var self = try Self.init(endpoint, allocator);
+        for (insert_headers) |h| {
+            try h.put(&self.headers);
         }
-        try self.headers.put(Config.KEY, config.key);
-        try self.headers.put(Config.VERSION, config.version);
-        try self.headers.put(Config.PROTOCOLS, config.subprotocol);
+        return self;
     }
 
     pub fn deinit(self: *Self) void {
@@ -177,7 +200,6 @@ pub const ClientHandshake = struct {
         log.info("parsing headers from buffer: {s}\n", .{headers_buffer});
         var headers_split = std.mem.splitSequence(u8, headers_buffer, "\r\n");
 
-        // var current_key: ?std.ArrayList(u8).Slice = null;
         const buffer_size: comptime_int = 64;
         var current_key: [buffer_size]u8 = undefined;
         @memset(&current_key, 0);
@@ -186,8 +208,7 @@ pub const ClientHandshake = struct {
         var buf: [buffer_size]u8 = undefined;
         @memset(&buf, 0);
         var cursor: usize = 0;
-        // var buf = std.ArrayList(u8).init(allocator);
-        // defer buf.deinit();
+
         while (headers_split.next()) |this_header| {
             if (std.mem.trim(u8, this_header, " ").len == 0) {
                 continue;
@@ -195,12 +216,10 @@ pub const ClientHandshake = struct {
             for (this_header) |char| {
                 switch (char) {
                     ' ' => {
-                        // if (buf.items.len != 0) {
                         if (buf.len != 0) {
                             buf[cursor] = char;
                             cursor += 1;
                             std.debug.assert(cursor < buffer_size);
-                            // try buf.append(char);
                         }
                     },
                     ':' => {
@@ -239,15 +258,15 @@ pub const ClientHandshake = struct {
 
 test "client handshake building" {
     const allocator = std.testing.allocator;
-    const handshake_cfg = ClientHandshake.Config{
-        .key = "dGhlIHNhbXBsZSBub25jZQ==",
-        .host = "127.0.0.1",
-        .origin = null,
-        .version = "13",
-        .subprotocol = "chat, superchat",
+    const headers: [4]ExpectedHeader =
+        .{
+        ExpectedHeader.from(ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
+        ExpectedHeader.from(ExpectedHeader.Host, "127.0.0.1"),
+        ExpectedHeader.from(ExpectedHeader.Version, "13"),
+        ExpectedHeader.from(ExpectedHeader.Protocol, "chat, superchat"),
     };
-    var handshake = try ClientHandshake.init("/chat", allocator);
-    try handshake.populate_config_headers(handshake_cfg);
+
+    var handshake = try ClientHandshake.init_with_headers("/chat", &headers, allocator);
     defer handshake.deinit();
     const body = try handshake.body();
     defer body.deinit();
@@ -258,15 +277,14 @@ test "client handshake building" {
 test "client handshake parsing" {
     const allocator = std.testing.allocator;
 
-    const handshake_cfg = ClientHandshake.Config{
-        .key = "dGhlIHNhbXBsZSBub25jZQ==",
-        .host = "127.0.0.1",
-        .origin = null,
-        .version = "13",
-        .subprotocol = "chat, superchat",
+    const headers: [4]ExpectedHeader =
+        .{
+        ExpectedHeader.from(ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
+        ExpectedHeader.from(ExpectedHeader.Host, "127.0.0.1"),
+        ExpectedHeader.from(ExpectedHeader.Version, "13"),
+        ExpectedHeader.from(ExpectedHeader.Protocol, "chat, superchat"),
     };
-    var expected_handshake = try ClientHandshake.init("/chat", allocator);
-    try expected_handshake.populate_config_headers(handshake_cfg);
+    var expected_handshake = try ClientHandshake.init_with_headers("/chat", &headers, allocator);
     defer expected_handshake.deinit();
     const body = try expected_handshake.body();
     defer body.deinit();
