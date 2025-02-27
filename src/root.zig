@@ -80,12 +80,12 @@ pub const ExpectedHeader = union(Tag) {
     protocol: Protocol,
     accept: Accept,
 
-    const Host = ExpectedHeader.Inner("Host");
-    const Origin = ExpectedHeader.Inner("Origin");
-    const Key = ExpectedHeader.Inner("Sec-WebSocket-Key");
-    const Version = ExpectedHeader.Inner("Sec-WebSocket-Version");
-    const Protocol = ExpectedHeader.Inner("Sec-WebSocket-Protocol");
-    const Accept = ExpectedHeader.Inner("Sec-WebSocket-Accept");
+    pub const Host = ExpectedHeader.Inner("Host");
+    pub const Origin = ExpectedHeader.Inner("Origin");
+    pub const Key = ExpectedHeader.Inner("Sec-WebSocket-Key");
+    pub const Version = ExpectedHeader.Inner("Sec-WebSocket-Version");
+    pub const Protocol = ExpectedHeader.Inner("Sec-WebSocket-Protocol");
+    pub const Accept = ExpectedHeader.Inner("Sec-WebSocket-Accept");
 
     fn Inner(
         comptime KeyStr: []const u8,
@@ -105,13 +105,19 @@ pub const ExpectedHeader = union(Tag) {
         };
     }
     /// Expects `field` to be an `ExpectedHeader.Inner`, will panic Otherwise
-    fn from(comptime field: type, val: []const u8) ExpectedHeader {
+    pub fn from(comptime field: type, val: []const u8) ExpectedHeader {
         inline for (@typeInfo(ExpectedHeader).Union.fields) |f| {
             if (f.type == field) {
                 const v = field.new(val);
                 return @unionInit(ExpectedHeader, f.name, v);
             }
         }
+    }
+    /// Expects `field` to be an `ExpectedHeader.Inner`, will panic Otherwise
+    pub fn get(comptime field: type, map: *HeaderMap) ?ExpectedHeader {
+        const k = field.MyKey;
+        const v = map.get(k) orelse return null;
+        return ExpectedHeader.from(field, v);
     }
 
     pub fn put(self: ExpectedHeader, map: *HeaderMap) !void {
@@ -125,6 +131,17 @@ pub const ExpectedHeader = union(Tag) {
         };
 
         return map.put(info.key, info.val);
+    }
+
+    pub fn inner_val(self: ExpectedHeader) []const u8 {
+        return switch (self) {
+            .host => |f| f.val,
+            .origin => |f| f.val,
+            .key => |f| f.val,
+            .version => |f| f.val,
+            .protocol => |f| f.val,
+            .accept => |f| f.val,
+        };
     }
 
     pub fn all_in_header_map(map: HeaderMap, allocator: std.mem.Allocator) std.mem.Allocator.Error!std.ArrayList(ExpectedHeader) {
@@ -343,9 +360,6 @@ test "all in header map" {
 
     const all = try ExpectedHeader.all_in_header_map(handshake.headers, allocator);
     defer all.deinit();
-    // if (all.items.len != headers.len) {
-    //     std.debug.panic("len not equal!\n", .{});
-    // }
 
     for (headers) |h_item| {
         var found = false;

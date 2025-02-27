@@ -32,15 +32,14 @@ pub fn main() !void {
     defer stream.close();
     print("Connecting to {}\n", .{peer});
 
-    const config = zebzockets.ClientHandshake.Config{
-        .key = "dGhlIHNhbXBsZSBub25jZQ==",
-        .host = "127.0.0.1",
-        .origin = null,
-        .subprotocol = "chat, superchat",
-        .version = "13",
+    const headers: [4]zebzockets.ExpectedHeader =
+        .{
+        zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
+        zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Host, "127.0.0.1"),
+        zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Version, "13"),
+        zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Protocol, "chat, superchat"),
     };
-    var handshake = try zebzockets.ClientHandshake.init("/chat", allocator);
-    try handshake.populate_config_headers(config);
+    var handshake = try zebzockets.ClientHandshake.init_with_headers("/chat", &headers, allocator);
     defer handshake.deinit();
     const body =
         try handshake.body();

@@ -53,9 +53,11 @@ pub fn main() !void {
 
     const message = try client.stream.reader().readAllAlloc(allocator, 1024);
     var client_handshake = try zebzockets.ClientHandshake.parse(message, allocator);
-    _ = try zebzockets.ClientHandshake.Config.from_header_map(client_handshake.headers);
     defer client_handshake.deinit();
     log.warn("parsed handshake: {any}\n", .{client_handshake});
+    const handshake = try ServerHandshake.from_client_handshake(&client_handshake, allocator);
+    log.warn("built handshake: {any}\n", .{handshake});
+    defer handshake.deinit();
     defer allocator.free(message);
 
     print("{} says {s}\n", .{ client.address, message });
@@ -73,13 +75,20 @@ pub const ServerHandshake = struct {
     arena: std.heap.ArenaAllocator,
     const Self = @This();
 
-    fn from_client_handshake(client_hs: zebzockets.ClientHandshake, allocator: std.mem.Allocator) !Self {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        const cfg = try zebzockets.ClientHandshake.Config.from_header_map(client_hs.headers);
+    fn deinit(self: Self) void {
+        self.arena.deinit();
+    }
 
-        const hashed = try hash_key(arena.allocator(), cfg.key);
+    fn from_client_handshake(client_hs: *zebzockets.ClientHandshake, allocator: std.mem.Allocator) !Self {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        // const headers = try zebzockets.ExpectedHeader.all_in_header_map(client_hs.headers, allocator);
+
+        const key = zebzockets.ExpectedHeader.get(zebzockets.ExpectedHeader.Key, &client_hs.headers) orelse return error.NoKey;
+        const hashed = try hash_key(arena.allocator(), key.inner_val());
         const base64 = try base64_encode_digest(arena.allocator(), hashed);
         _ = base64;
+
+        return error.BAD;
 
         // _ = client_hs;
     }
