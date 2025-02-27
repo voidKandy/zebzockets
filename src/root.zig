@@ -73,6 +73,8 @@ pub const ClientHandshake = struct {
         /// Used to protect against unauthorized cross-origin use of a WebSocket server by scripts using the WebSocket API in a web browser.
         /// This header field is sent by browser clients; for non-browser clients, this header field may be sent if it makes sense in the context of those clients.
         origin: ?[]const u8,
+        version: []const u8,
+        subprotocol: []const u8,
     };
     const HeaderMap =
         std.StringArrayHashMap([]const u8);
@@ -88,8 +90,6 @@ pub const ClientHandshake = struct {
         try headers.put("Upgrade", "websocket");
         try headers.put("Connection", "Upgrade");
         // this might need to be configurable
-        try headers.put("Sec-WebSocket-Version", "13");
-        try headers.put("Sec-WebSocket-Protocol", "chat, superchat");
 
         return Self{
             .headers = headers,
@@ -104,17 +104,12 @@ pub const ClientHandshake = struct {
             try self.headers.put("Origin", origin);
         }
         try self.headers.put("Sec-WebSocket-Key", config.key);
+        try self.headers.put("Sec-WebSocket-Version", config.version);
+        try self.headers.put("Sec-WebSocket-Protocol", config.subprotocol);
     }
 
     pub fn deinit(self: *Self) void {
         self.arena.deinit();
-        // var headers = self.headers.iterator();
-        // while (headers.next()) |e| {
-        //     log.warn("freeing: {any}\n", .{e});
-        //     self.allocator.free(e.key_ptr.*);
-        //     self.allocator.free(e.value_ptr.*);
-        // }
-        // self.headers.deinit();
         return;
     }
 
@@ -195,7 +190,6 @@ pub const ClientHandshake = struct {
                         cursor = 0;
                     },
                     else => {
-                        // try buf.append(char);
                         buf[cursor] = char;
                         cursor += 1;
                         std.debug.assert(cursor < buffer_size);
@@ -203,9 +197,6 @@ pub const ClientHandshake = struct {
                 }
             }
             if (current_key_len != 0) {
-                // const val =
-                //     try buf.toOwnedSlice();
-                // log.warn("inserting val: {s} into key: {s}\n", .{ val, key });
                 const trimmed_key =
                     std.mem.trim(u8, current_key[0..current_key_len], " ");
                 const trimmed_val =
@@ -228,7 +219,13 @@ pub const ClientHandshake = struct {
 
 test "client handshake building" {
     const allocator = std.testing.allocator;
-    const handshake_cfg = ClientHandshake.Config{ .key = "dGhlIHNhbXBsZSBub25jZQ==", .host = "127.0.0.1", .origin = null };
+    const handshake_cfg = ClientHandshake.Config{
+        .key = "dGhlIHNhbXBsZSBub25jZQ==",
+        .host = "127.0.0.1",
+        .origin = null,
+        .version = "13",
+        .subprotocol = "chat, superchat",
+    };
     var handshake = try ClientHandshake.init("/chat", allocator);
     try handshake.populate_config_headers(handshake_cfg);
     defer handshake.deinit();
@@ -241,7 +238,13 @@ test "client handshake building" {
 test "client handshake parsing" {
     const allocator = std.testing.allocator;
 
-    const handshake_cfg = ClientHandshake.Config{ .key = "dGhlIHNhbXBsZSBub25jZQ==", .host = "127.0.0.1", .origin = null };
+    const handshake_cfg = ClientHandshake.Config{
+        .key = "dGhlIHNhbXBsZSBub25jZQ==",
+        .host = "127.0.0.1",
+        .origin = null,
+        .version = "13",
+        .subprotocol = "chat, superchat",
+    };
     var expected_handshake = try ClientHandshake.init("/chat", allocator);
     try expected_handshake.populate_config_headers(handshake_cfg);
     defer expected_handshake.deinit();
