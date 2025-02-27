@@ -1,5 +1,5 @@
 const std = @import("std");
-const websockets = @import("websockets");
+const zebzockets = @import("zebzockets");
 const net = std.net;
 const print = std.debug.print;
 const assert = std.debug.assert;
@@ -25,21 +25,21 @@ pub fn main() !void {
         print("{s}", .{usage});
         return;
     }
-    const info = websockets.connection_information(first_arg);
+    const info = zebzockets.connection_information(first_arg);
     const peer = try std.net.Address.parseIp4(info.host, info.port);
     // Connect to peer
     const stream = try net.tcpConnectToAddress(peer);
     defer stream.close();
     print("Connecting to {}\n", .{peer});
 
-    const config = websockets.ClientHandshake.Config{
+    const config = zebzockets.ClientHandshake.Config{
         .key = "dGhlIHNhbXBsZSBub25jZQ==",
         .host = "127.0.0.1",
         .origin = null,
         .subprotocol = "chat, superchat",
         .version = "13",
     };
-    var handshake = try websockets.ClientHandshake.init("/chat", allocator);
+    var handshake = try zebzockets.ClientHandshake.init("/chat", allocator);
     try handshake.populate_config_headers(config);
     defer handshake.deinit();
     const body =

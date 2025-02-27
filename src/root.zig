@@ -63,6 +63,8 @@ const Method = enum {
     }
 };
 
+const HeaderMap =
+    std.StringArrayHashMap([]const u8);
 pub const ClientHandshake = struct {
     /// Used to populate required headers AFTER initialization
     pub const Config = struct {
@@ -96,8 +98,6 @@ pub const ClientHandshake = struct {
             };
         }
     };
-    const HeaderMap =
-        std.StringArrayHashMap([]const u8);
     headers: HeaderMap,
     endpoint: []const u8,
     arena: std.heap.ArenaAllocator,
@@ -106,7 +106,7 @@ pub const ClientHandshake = struct {
     pub fn init(endpoint: []const u8, allocator: std.mem.Allocator) !Self {
         var arena = std.heap.ArenaAllocator.init(allocator);
 
-        var headers = Self.HeaderMap.init(arena.allocator());
+        var headers = HeaderMap.init(arena.allocator());
         try headers.put("Upgrade", "websocket");
         try headers.put("Connection", "Upgrade");
         // this might need to be configurable

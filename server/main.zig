@@ -1,5 +1,5 @@
 const std = @import("std");
-const websockets = @import("websockets");
+const zebzockets = @import("zebzockets");
 const net = std.net;
 const log = std.log;
 const print = std.debug.print;
@@ -34,7 +34,7 @@ pub fn main() !void {
         print("{s}", .{usage});
         return;
     }
-    const info = websockets.connection_information(first_arg);
+    const info = zebzockets.connection_information(first_arg);
     const loopback = try std.net.Ip4Address.parse(info.host, info.port);
 
     const localhost = net.Address{ .in = loopback };
@@ -52,8 +52,8 @@ pub fn main() !void {
     print("Connection received! {} is sending data.\n", .{client.address});
 
     const message = try client.stream.reader().readAllAlloc(allocator, 1024);
-    var client_handshake = try websockets.ClientHandshake.parse(message, allocator);
-    _ = try websockets.ClientHandshake.Config.from_header_map(client_handshake.headers);
+    var client_handshake = try zebzockets.ClientHandshake.parse(message, allocator);
+    _ = try zebzockets.ClientHandshake.Config.from_header_map(client_handshake.headers);
     defer client_handshake.deinit();
     log.warn("parsed handshake: {any}\n", .{client_handshake});
     defer allocator.free(message);
@@ -61,6 +61,14 @@ pub fn main() !void {
     print("{} says {s}\n", .{ client.address, message });
 }
 
+pub const ServerHandshake = struct {
+    headers: zebzockets.HeaderMap,
+    const Self = @This();
+
+    fn from_client_handshake(client_hs: zebzockets.ClientHandshake) !Self {
+        _ = client_hs;
+    }
+};
 const Sha1 = std.crypto.hash.Sha1;
 /// Concatenates a UUID to the given key and returns a Hash of the combination
 fn hash_key(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error![Sha1.digest_length]u8 {
