@@ -75,6 +75,26 @@ pub const ClientHandshake = struct {
         origin: ?[]const u8,
         version: []const u8,
         subprotocol: []const u8,
+
+        const HOST = "Host";
+        const ORIGIN = "Origin";
+        const KEY = "Sec-WebSocket-Key";
+        const VERSION = "Sec-WebSocket-Version";
+        const PROTOCOLS = "Sec-WebSocket-Protocol";
+        pub fn from_header_map(map: HeaderMap) !Config {
+            const host = map.get(Config.HOST) orelse return error.NoHost;
+            const origin = map.get(Config.ORIGIN);
+            const key = map.get(Config.KEY) orelse return error.NoKey;
+            const version = map.get(Config.VERSION) orelse return error.NoVersion;
+            const protocols = map.get(Config.PROTOCOLS) orelse return error.NoProtocol;
+            return Config{
+                .host = host,
+                .origin = origin,
+                .key = key,
+                .version = version,
+                .protocols = protocols,
+            };
+        }
     };
     const HeaderMap =
         std.StringArrayHashMap([]const u8);
@@ -99,13 +119,13 @@ pub const ClientHandshake = struct {
     }
 
     pub fn populate_config_headers(self: *Self, config: Self.Config) !void {
-        try self.headers.put("Host", config.host);
+        try self.headers.put(Config.HOST, config.host);
         if (config.origin) |origin| {
-            try self.headers.put("Origin", origin);
+            try self.headers.put(Config.ORIGIN, origin);
         }
-        try self.headers.put("Sec-WebSocket-Key", config.key);
-        try self.headers.put("Sec-WebSocket-Version", config.version);
-        try self.headers.put("Sec-WebSocket-Protocol", config.subprotocol);
+        try self.headers.put(Config.KEY, config.key);
+        try self.headers.put(Config.VERSION, config.version);
+        try self.headers.put(Config.PROTOCOLS, config.subprotocol);
     }
 
     pub fn deinit(self: *Self) void {

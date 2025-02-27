@@ -1,8 +1,3 @@
-//! Start a TCP server at an unused port.
-//!
-//! Test with
-//! echo "hello zig" | nc localhost <port>
-
 const std = @import("std");
 const websockets = @import("websockets");
 const net = std.net;
@@ -58,14 +53,57 @@ pub fn main() !void {
 
     const message = try client.stream.reader().readAllAlloc(allocator, 1024);
     var client_handshake = try websockets.ClientHandshake.parse(message, allocator);
+    _ = try websockets.ClientHandshake.Config.from_header_map(client_handshake.headers);
     defer client_handshake.deinit();
     log.warn("parsed handshake: {any}\n", .{client_handshake});
-
     defer allocator.free(message);
 
     print("{} says {s}\n", .{ client.address, message });
 }
 
-test "health" {
-    try std.testing.expect(true);
+const Sha1 = std.crypto.hash.Sha1;
+/// Concatenates a UUID to the given key and returns a Hash of the combination
+fn hash_key(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error![Sha1.digest_length]u8 {
+    // eventually, generate this
+    // https://codeberg.org/joshua-software-dev/uuid-zig
+    const uuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    const size = uuid.len + key.len;
+    var buffer = try allocator.alloc(u8, size);
+    defer allocator.free(buffer);
+    for (key, 0..) |ch, i| {
+        buffer[i] = ch;
+    }
+    for (uuid, 0..) |ch, i| {
+        buffer[i + key.len] = ch;
+    }
+    var digest: [Sha1.digest_length]u8 = undefined;
+    Sha1.hash(buffer, &digest, .{});
+    return digest;
+}
+const Encoder = std.base64.standard.Encoder;
+const Decoder = std.base64.standard.Decoder;
+
+/// Base 64 encodes hashed digest
+/// Returned []u8 must be cleaned up by the called
+fn base64_encode_digest(allocator: std.mem.Allocator, src: [Sha1.digest_length]u8) std.mem.Allocator.Error![]u8 {
+    const encoded_length = Encoder.calcSize(src.len);
+    const encoded_buffer = try allocator.alloc(u8, encoded_length);
+    _ = Encoder.encode(encoded_buffer, &src);
+    return encoded_buffer;
+    // const decoded_length = try Decoder.calcSizeForSlice(encoded_buffer);
+    // const decoded_buffer = try allocator.alloc(u8, decoded_length);
+    // defer allocator.free(decoded_buffer);
+
+    // try Decoder.decode(decoded_buffer, encoded_buffer);
+    // try std.testing.expectEqualStrings(src, decoded_buffer);
+}
+
+test "process key" {
+    const allocator = std.testing.allocator;
+    const key = "dGhlIHNhbXBsZSBub25jZQ==";
+    const hashed = try hash_key(allocator, key);
+    const base64 = try base64_encode_digest(allocator, hashed);
+    defer allocator.free(base64);
+    log.warn("Hashed Value: {s}\nEncoded: {s}\n", .{ hashed, base64 });
+    print("PASSED PROCESS KEY\n", .{});
 }
