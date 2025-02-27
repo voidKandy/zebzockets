@@ -131,7 +131,7 @@ pub const ClientHandshake = struct {
     }
 
     pub fn parse(str: []u8, allocator: std.mem.Allocator) !Self {
-        log.warn("parsing: {s}\n", .{str});
+        log.info("parsing: {s}\n", .{str});
         var line_split = std.mem.splitSequence(u8, str, "\r\n");
         const leading_line = line_split.first();
         const headers_buffer = line_split.buffer[leading_line.len..];
@@ -186,7 +186,7 @@ pub const ClientHandshake = struct {
                     ':' => {
                         @memcpy(&current_key, &buf);
                         current_key_len = cursor;
-                        log.warn("setting key to: {s}\n", .{current_key[0..current_key_len]});
+                        log.info("setting key to: {s}\n", .{current_key[0..current_key_len]});
                         cursor = 0;
                     },
                     else => {
@@ -205,7 +205,7 @@ pub const ClientHandshake = struct {
                 const val = try self.arena.allocator().alloc(u8, trimmed_val.len);
                 @memcpy(key, trimmed_key);
                 @memcpy(val, trimmed_val);
-                log.warn("inserting val: {s} into key: {s}\n", .{ val, key });
+                log.info("inserting val: {s} into key: {s}\n", .{ val, key });
                 try self.headers.put(key, val);
                 current_key_len = 0;
                 cursor = 0;

@@ -6,6 +6,7 @@
 const std = @import("std");
 const websockets = @import("websockets");
 const net = std.net;
+const log = std.log;
 const print = std.debug.print;
 const assert = std.debug.assert;
 
@@ -56,6 +57,10 @@ pub fn main() !void {
     print("Connection received! {} is sending data.\n", .{client.address});
 
     const message = try client.stream.reader().readAllAlloc(allocator, 1024);
+    var client_handshake = try websockets.ClientHandshake.parse(message, allocator);
+    defer client_handshake.deinit();
+    log.warn("parsed handshake: {any}\n", .{client_handshake});
+
     defer allocator.free(message);
 
     print("{} says {s}\n", .{ client.address, message });

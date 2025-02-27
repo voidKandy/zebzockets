@@ -32,8 +32,15 @@ pub fn main() !void {
     defer stream.close();
     print("Connecting to {}\n", .{peer});
 
-    const handshake_cfg = websockets.ClientHandshake.Config{ .key = "dGhlIHNhbXBsZSBub25jZQ==", .endpoint = "/chat", .host = "127.0.0.1", .origin = null };
-    var handshake = try websockets.ClientHandshake.init(handshake_cfg, allocator);
+    const config = websockets.ClientHandshake.Config{
+        .key = "dGhlIHNhbXBsZSBub25jZQ==",
+        .host = "127.0.0.1",
+        .origin = null,
+        .subprotocol = "chat, superchat",
+        .version = "13",
+    };
+    var handshake = try websockets.ClientHandshake.init("/chat", allocator);
+    try handshake.populate_config_headers(config);
     defer handshake.deinit();
     const body =
         try handshake.body();
