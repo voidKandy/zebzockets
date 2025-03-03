@@ -56,20 +56,19 @@ pub const ServerHandshake = struct {
         self.arena.deinit();
     }
 
-    fn from_client_handshake(client_hs: *zebzockets.ClientHandshake, allocator: std.mem.Allocator) !Self {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        // const headers = try zebzockets.ExpectedHeader.all_in_header_map(client_hs.headers, allocator);
-
-        const key = zebzockets.ExpectedHeader.get(zebzockets.ExpectedHeader.Key, &client_hs.headers) orelse return error.NoKey;
-        const hashed = try hash_key(arena.allocator(), key.inner_val());
-        const base64 = try base64_encode_digest(arena.allocator(), hashed);
-        _ = base64;
-
-        return error.BAD;
-
-        // _ = client_hs;
-    }
+    // fn from_client_handshake(client_hs: *zebzockets.ClientHandshake, allocator: std.mem.Allocator) !Self {
+    //     var arena = std.heap.ArenaAllocator.init(allocator);
+    //     const key = zebzockets.ExpectedHeader.get(zebzockets.ExpectedHeader.Key, &client_hs.headers) orelse return error.NoKey;
+    //     const hashed = try hash_key(arena.allocator(), key.inner_val());
+    //     const base64 = try base64_encode_digest(arena.allocator(), hashed);
+    //     _ = base64;
+    //     return error.BAD;
+    // }
 };
+
+fn handle_client_handshake_msg(msg: []u8) void {
+    std.mem.splitSequence(u8, msg, '\n');
+}
 
 const Sha1 = std.crypto.hash.Sha1;
 /// Concatenates a UUID to the given key and returns a Hash of the combination

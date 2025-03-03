@@ -135,47 +135,62 @@ pub const ExpectedHeader = union(Tag) {
     protocol: Protocol,
     accept: Accept,
 
-    pub const Host = ExpectedHeader.Inner("Host");
-    pub const Origin = ExpectedHeader.Inner("Origin");
-    pub const Key = ExpectedHeader.Inner("Sec-WebSocket-Key");
-    pub const Version = ExpectedHeader.Inner("Sec-WebSocket-Version");
-    pub const Protocol = ExpectedHeader.Inner("Sec-WebSocket-Protocol");
-    pub const Accept = ExpectedHeader.Inner("Sec-WebSocket-Accept");
+    const Self = @This();
+
+    pub const Host = Self.Inner("Host");
+    pub const Origin = Self.Inner("Origin");
+    pub const Key = Self.Inner("Sec-WebSocket-Key");
+    pub const Version = Self.Inner("Sec-WebSocket-Version");
+    pub const Protocol = Self.Inner("Sec-WebSocket-Protocol");
+    pub const Accept = Self.Inner("Sec-WebSocket-Accept");
 
     fn Inner(
         comptime KeyStr: []const u8,
     ) type {
         return struct {
             const MyKey = KeyStr;
-            const Self = @This();
+            const InnerSelf = @This();
             val: []const u8,
             // for runtime access of KeyStr from instance
-            fn key(self: Self) []const u8 {
+            fn key(self: InnerSelf) []const u8 {
                 _ = self;
                 return KeyStr;
             }
-            fn new(val: []const u8) Self {
-                return Self{ .val = val };
+            fn new(val: []const u8) InnerSelf {
+                return InnerSelf{ .val = val };
             }
         };
     }
-    /// Expects `inner` to be an `ExpectedHeader.Inner`, will panic Otherwise
-    pub fn from(comptime inner: type, val: []const u8) ExpectedHeader {
-        inline for (@typeInfo(ExpectedHeader).Union.fields) |f| {
+    /// Expects a *Single line* string
+    pub fn try_from_str(str: []const u8) ?Self {
+        const colon_idx = std.mem.indexOfScalar(u8, str, ':').?;
+        const header = std.mem.trim(u8, str[0..colon_idx], " ");
+        const val = std.mem.trim(u8, str[colon_idx + 1 ..], " ");
+        inline for (@typeInfo(Self).Union.fields) |f| {
+            if (std.mem.eql(u8, f.type.MyKey, header)) {
+                const v = f.type.new(val);
+                return @unionInit(Self, f.name, v);
+            }
+        }
+        return null;
+    }
+    /// Expects `inner` to be an `Self.Inner`, will panic Otherwise
+    pub fn from(comptime inner: type, val: []const u8) Self {
+        inline for (@typeInfo(Self).Union.fields) |f| {
             if (f.type == inner) {
                 const v = inner.new(val);
-                return @unionInit(ExpectedHeader, f.name, v);
+                return @unionInit(Self, f.name, v);
             }
         }
     }
-    /// Expects `field` to be an `ExpectedHeader.Inner`, will panic Otherwise
-    pub fn get(comptime field: type, map: *HeaderMap) ?ExpectedHeader {
+    /// Expects `field` to be an `Self.Inner`, will panic Otherwise
+    pub fn get(comptime field: type, map: *HeaderMap) ?Self {
         const k = field.MyKey;
         const v = map.get(k) orelse return null;
-        return ExpectedHeader.from(field, v);
+        return Self.from(field, v);
     }
 
-    pub fn put(self: ExpectedHeader, map: *HeaderMap) !void {
+    pub fn put(self: Self, map: *HeaderMap) !void {
         const info = switch (self) {
             .host => |f| .{ .key = f.key(), .val = f.val },
             .origin => |f| .{ .key = f.key(), .val = f.val },
@@ -188,7 +203,7 @@ pub const ExpectedHeader = union(Tag) {
         return map.put(info.key, info.val);
     }
 
-    pub fn inner_val(self: ExpectedHeader) []const u8 {
+    pub fn inner_val(self: Self) []const u8 {
         return switch (self) {
             .host => |f| f.val,
             .origin => |f| f.val,
@@ -205,6 +220,12 @@ test "parse method" {
     const get_method = Method.parse(get) orelse std.debug.panic("Failed to parse get method", .{});
     try std.testing.expectEqual(Method.get, get_method);
     std.debug.print("METHOD PARSING PASSED\n", .{});
+}
+
+test "Expected Header from str" {
+    const header = ExpectedHeader.try_from_str("Host: www.example.com") orelse return error.Fail;
+    _ = header;
+    std.debug.print("HEADER FROM STRING PASSED\n", .{});
 }
 
 test "Websocket URI parsing works" {

@@ -85,6 +85,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    client_unit_tests.root_module.addImport("zebzockets", &lib.root_module);
     const run_client_unit_tests = b.addRunArtifact(client_unit_tests);
 
     const server_unit_tests = b.addTest(.{
@@ -92,6 +93,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    server_unit_tests.root_module.addImport("zebzockets", &lib.root_module);
 
     const run_server_unit_tests = b.addRunArtifact(server_unit_tests);
 
