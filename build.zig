@@ -84,8 +84,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
+    // I guess this must be included??
     client_unit_tests.root_module.addImport("zebzockets", &lib.root_module);
+
     const run_client_unit_tests = b.addRunArtifact(client_unit_tests);
 
     const server_unit_tests = b.addTest(.{
@@ -93,14 +94,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    server_unit_tests.root_module.addImport("zebzockets", &lib.root_module);
 
     const run_server_unit_tests = b.addRunArtifact(server_unit_tests);
 
-    // Similar to creating the run step earlier, this exposes a `test` step to
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&lib.step);
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_client_unit_tests.step);
     test_step.dependOn(&run_server_unit_tests.step);
