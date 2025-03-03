@@ -1,42 +1,97 @@
 //! Shared library for client and server
-
 const std = @import("std");
+pub const cli = @import("cli.zig");
 const testing = std.testing;
 const log = std.log;
-const default_host = "127.0.0.1";
-const default_port = 6000;
 
-pub const ConnectionInfo = struct {
+const WsUri = struct {
+    secure: bool,
+    port: []const u8,
     host: []const u8,
-    port: u16,
-};
-/// Assumes the `arg` passed is formatted as follows:
-/// \<host\>:\<port\>
-/// If either `host` or `port` are missing, replaces them with default values
-pub fn connection_information(arg: []const u8) ConnectionInfo {
-    var split = std.mem.split(u8, arg, ":");
-    const host = blk: {
-        const first = split.first();
-        if (first.len == 0) {
-            break :blk default_host;
-        } else {
-            break :blk first;
-        }
-    };
-    const port: u16 = blk: {
-        const next = split.next() orelse break :blk default_port;
-        if (next.len != 0) {
-            break :blk std.fmt.parseInt(u16, next, 10) catch |err| {
-                std.debug.panic("could not parse port {s} to int: {any}\n", .{ next, err });
-            };
-        } else {
-            break :blk default_port;
-        }
-    };
+    path: []const u8,
+    query: ?[]const u8,
 
-    return .{ .host = host, .port = port };
-    // return try std.net.Address.parseIp4(host, port);
-}
+    const Self = @This();
+    const SECURE_PORT_DEFAULT = "443";
+    const INSECURE_PORT_DEFAULT = "80";
+
+    fn eql(self: Self, other: Self) bool {
+        if (self.secure != other.secure) return false;
+        if (!std.mem.eql(u8, self.port, other.port)) return false;
+        if (!std.mem.eql(u8, self.host, other.host)) return false;
+        if (!std.mem.eql(u8, self.path, other.path)) return false;
+        if (self.query) |uq| {
+            const oq = other.query orelse return false;
+            return std.mem.eql(u8, uq, oq);
+        }
+        return true;
+    }
+
+    fn from_str(str: []const u8) !Self {
+        const first_colon_idx = std.mem.indexOfScalar(u8, str, ':') orelse return error.NoColon;
+        const protocol_slice =
+            str[0..first_colon_idx];
+        log.warn("Protocol Slice: {s}\n", .{protocol_slice});
+        if (!std.mem.eql(u8, str[first_colon_idx + 1 .. first_colon_idx + 3], "//")) {
+            log.err("Should have gotten '//' after first colon\n{s}\n", .{str});
+            return error.InvalidUriStr;
+        }
+
+        const host_port_path_slice = str[first_colon_idx + 3 ..];
+        log.warn("Host Port Path Slice: {s}\n", .{host_port_path_slice});
+        const secure = blk: {
+            if (std.mem.eql(u8, protocol_slice, "ws")) {
+                break :blk false;
+            } else if (std.mem.eql(u8, protocol_slice, "wss")) {
+                break :blk true;
+            } else {
+                log.err("encountered unexpected protocol: {s}\n", .{protocol_slice});
+                return error.InvalidProtocol;
+            }
+        };
+
+        var port_present = false;
+        var port: ?[]const u8 = null;
+        const host_cutoff = blk: {
+            if (std.mem.indexOfScalar(u8, host_port_path_slice, ':')) |i| {
+                port_present = true;
+                break :blk i;
+            } else if (std.mem.indexOfScalar(u8, host_port_path_slice, '/')) |i| {
+                break :blk i;
+            } else return error.InvalidUriStr;
+        };
+        const host = host_port_path_slice[0..host_cutoff];
+        var host_port_slice_cutoff = host_cutoff;
+        if (port_present) {
+            const port_cutoff = std.mem.indexOfScalar(u8, host_port_path_slice, '/') orelse return error.InvalidUriStr;
+            port = host_port_path_slice[host_cutoff + 1 .. port_cutoff];
+            host_port_slice_cutoff = port_cutoff;
+        } else {
+            port = switch (secure) {
+                true => SECURE_PORT_DEFAULT,
+                false => INSECURE_PORT_DEFAULT,
+            };
+        }
+
+        var query: ?[]const u8 = null;
+        var path_slice = host_port_path_slice[host_port_slice_cutoff..];
+        log.warn("Path Slice: {s}\n", .{path_slice});
+        if (std.mem.indexOfScalar(u8, path_slice, '?')) |i| {
+            query = if (std.mem.indexOfScalar(u8, path_slice, '#')) |e|
+                host_port_path_slice[i + host_port_slice_cutoff + 1 .. host_port_slice_cutoff + e]
+            else
+                host_port_path_slice[i + host_port_slice_cutoff + 1 ..];
+            path_slice = host_port_path_slice[host_port_slice_cutoff .. host_port_slice_cutoff + i];
+        }
+        return Self{
+            .path = path_slice,
+            .query = query,
+            .port = port.?,
+            .host = host,
+            .secure = secure,
+        };
+    }
+};
 
 const Method = enum {
     options,
@@ -156,7 +211,7 @@ pub const ExpectedHeader = union(Tag) {
         return all;
     }
 };
-/// It contains everything you need for rendering a piece of HTML
+
 pub const ClientHandshake = struct {
     headers: HeaderMap,
     endpoint: []const u8,
@@ -423,4 +478,72 @@ test "all in header map" {
     }
 
     std.debug.print("ALL IN HEADERS PASSED\n", .{});
+}
+
+test "Websocket URI parsing works" {
+    const Case = struct { expected: WsUri, str: []const u8 };
+    const cases: []const Case = &.{
+        Case{
+            .expected = WsUri{
+                .secure = true,
+                .port = "443",
+                .host = "www.somehost.com",
+                .path = "/",
+                .query = null,
+            },
+            .str = "wss://www.somehost.com/",
+        },
+        Case{
+            .expected = WsUri{
+                .secure = false,
+                .port = "4000",
+                .host = "www.somehost.com",
+                .path = "/this",
+                .query = null,
+            },
+            .str = "ws://www.somehost.com:4000/this",
+        },
+        Case{
+            .expected = WsUri{
+                .secure = true,
+                .port = "443",
+                .host = "www.somehost.com",
+                .path = "/this",
+                .query = "some=query",
+            },
+            .str = "wss://www.somehost.com/this?some=query",
+        },
+        Case{
+            .expected = WsUri{
+                .secure = true,
+                .port = "443",
+                .host = "www.somehost.com",
+                .path = "/this",
+                .query = "some=query&other=query",
+            },
+            .str = "wss://www.somehost.com/this?some=query&other=query#",
+        },
+    };
+
+    for (cases) |case| {
+        const got = try WsUri.from_str(case.str);
+
+        if (!case.expected.eql(got)) {
+            std.debug.print("Did not get expected URI.\n", .{});
+            std.debug.print("Expected\n  host={s}\n  port={s}\n  path={s}\n  query={s}\n", .{
+                case.expected.host,
+                case.expected.port,
+                case.expected.path,
+                case.expected.query orelse "NoQuery",
+            });
+            std.debug.print("Got\n  host={s}\n  port={s}\n  path={s}\n  query={s}\n", .{
+                got.host,
+                got.port,
+                got.path,
+                got.query orelse "NoQuery",
+            });
+        }
+    }
+
+    std.debug.print("WEBSOCKET URI PARSING PASSED\n", .{});
 }

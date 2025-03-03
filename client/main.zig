@@ -13,21 +13,8 @@ pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
-    var args = std.process.args();
-    assert(args.skip());
-
-    const first_arg = args.next() orelse {
-        print("{s}", .{usage});
-        return;
-    };
-
-    if (std.mem.eql(u8, "--help", first_arg)) {
-        print("{s}", .{usage});
-        return;
-    }
-    const info = zebzockets.connection_information(first_arg);
-    const peer = try std.net.Address.parseIp4(info.host, info.port);
-    // Connect to peer
+    const args = zebzockets.cli.CliArgs.parse() orelse return;
+    const peer = try std.net.Address.parseIp4(args.info.host, args.info.port);
     const stream = try net.tcpConnectToAddress(peer);
     defer stream.close();
     print("Connecting to {}\n", .{peer});

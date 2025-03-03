@@ -5,37 +5,14 @@ const log = std.log;
 const print = std.debug.print;
 const assert = std.debug.assert;
 
-// The cli has the following possible args:
-// > Members marked exclusive change the behaviour of the cli
-// --help - Shows help message (exclusive)
-// <host>:<port> - each of which are optional
-//   <binary> :3000 will use the default host
-//   <binary> 192.5.8.65: will use the default port
-
-const usage =
-    \\ usage: <binary-name> [<host>:<port>]|--help
-    \\ To use default host and port values simply pass ':'
-;
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var args = std.process.args();
-    assert(args.skip());
+    const args = zebzockets.cli.CliArgs.parse() orelse return;
 
-    const first_arg = args.next() orelse {
-        print("{s}", .{usage});
-        return;
-    };
-
-    if (std.mem.eql(u8, "--help", first_arg)) {
-        print("{s}", .{usage});
-        return;
-    }
-    const info = zebzockets.connection_information(first_arg);
-    const loopback = try std.net.Ip4Address.parse(info.host, info.port);
+    const loopback = try std.net.Ip4Address.parse(args.info.host, args.info.port);
 
     const localhost = net.Address{ .in = loopback };
     var server = try localhost.listen(.{
@@ -44,7 +21,7 @@ pub fn main() !void {
     defer server.deinit();
 
     const addr = server.listen_address;
-    print("Listening on {s}:{}, access this port to end the program\n", .{ info.host, addr.getPort() });
+    print("Listening on {s}:{}, access this port to end the program\n", .{ args.info.host, addr.getPort() });
 
     var client = try server.accept();
     defer client.stream.close();
@@ -65,12 +42,12 @@ pub fn main() !void {
 
 pub const ServerHandshake = struct {
     // there must be some better way of creating configs
-    const Config = struct {
-        accept: []const u8,
-        protocol: []const u8,
-        const PROTOCOL = "Sec-WebSocket-Protocol";
-        const ACCEPT = "Sec-WebSocket-Accept";
-    };
+    // const Config = struct {
+    //     accept: []const u8,
+    //     protocol: []const u8,
+    //     const PROTOCOL = "Sec-WebSocket-Protocol";
+    //     const ACCEPT = "Sec-WebSocket-Accept";
+    // };
     headers: zebzockets.HeaderMap,
     arena: std.heap.ArenaAllocator,
     const Self = @This();
@@ -93,6 +70,7 @@ pub const ServerHandshake = struct {
         // _ = client_hs;
     }
 };
+
 const Sha1 = std.crypto.hash.Sha1;
 /// Concatenates a UUID to the given key and returns a Hash of the combination
 fn hash_key(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Error![Sha1.digest_length]u8 {
@@ -112,9 +90,9 @@ fn hash_key(allocator: std.mem.Allocator, key: []const u8) std.mem.Allocator.Err
     Sha1.hash(buffer, &digest, .{});
     return digest;
 }
+
 const Encoder = std.base64.standard.Encoder;
 const Decoder = std.base64.standard.Decoder;
-
 /// Base 64 encodes hashed digest
 /// Returned []u8 must be cleaned up by the called
 fn base64_encode_digest(allocator: std.mem.Allocator, src: [Sha1.digest_length]u8) std.mem.Allocator.Error![]u8 {
