@@ -3,7 +3,7 @@ const std = @import("std");
 pub const CliArgs = struct {
     info: ConnectionInfo,
     /// Contains args iterator in case something using this expects more args
-    args: std.process.ArgsIterator,
+    args: std.process.ArgIterator,
     const Self = @This();
 
     const usage =

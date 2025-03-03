@@ -4,7 +4,7 @@ pub const cli = @import("cli.zig");
 const testing = std.testing;
 const log = std.log;
 
-const WsUri = struct {
+pub const WsUri = struct {
     secure: bool,
     port: []const u8,
     host: []const u8,
@@ -27,7 +27,7 @@ const WsUri = struct {
         return true;
     }
 
-    fn from_str(str: []const u8) !Self {
+    pub fn from_str(str: []const u8) !Self {
         const first_colon_idx = std.mem.indexOfScalar(u8, str, ':') orelse return error.NoColon;
         const protocol_slice =
             str[0..first_colon_idx];
@@ -159,11 +159,11 @@ pub const ExpectedHeader = union(Tag) {
             }
         };
     }
-    /// Expects `field` to be an `ExpectedHeader.Inner`, will panic Otherwise
-    pub fn from(comptime field: type, val: []const u8) ExpectedHeader {
+    /// Expects `inner` to be an `ExpectedHeader.Inner`, will panic Otherwise
+    pub fn from(comptime inner: type, val: []const u8) ExpectedHeader {
         inline for (@typeInfo(ExpectedHeader).Union.fields) |f| {
-            if (f.type == field) {
-                const v = field.new(val);
+            if (f.type == inner) {
+                const v = inner.new(val);
                 return @unionInit(ExpectedHeader, f.name, v);
             }
         }
@@ -198,286 +198,13 @@ pub const ExpectedHeader = union(Tag) {
             .accept => |f| f.val,
         };
     }
-
-    pub fn all_in_header_map(map: HeaderMap, allocator: std.mem.Allocator) std.mem.Allocator.Error!std.ArrayList(ExpectedHeader) {
-        var all = std.ArrayList(ExpectedHeader).init(allocator);
-        inline for (@typeInfo(ExpectedHeader).Union.fields) |f| {
-            const k = f.type.MyKey;
-            if (map.get(k)) |v| {
-                try all.append(ExpectedHeader.from(f.type, v));
-            }
-        }
-
-        return all;
-    }
 };
-
-pub const ClientHandshake = struct {
-    headers: HeaderMap,
-    endpoint: []const u8,
-    arena: std.heap.ArenaAllocator,
-    const Self = @This();
-
-    pub fn init(endpoint: []const u8, allocator: std.mem.Allocator) !Self {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        var headers = HeaderMap.init(arena.allocator());
-        try headers.put("Upgrade", "websocket");
-        try headers.put("Connection", "Upgrade");
-        return Self{
-            .headers = headers,
-            .endpoint = endpoint,
-            .arena = arena,
-        };
-    }
-    pub fn init_with_headers(endpoint: []const u8, insert_headers: []const ExpectedHeader, allocator: std.mem.Allocator) !Self {
-        var self = try Self.init(endpoint, allocator);
-        for (insert_headers) |h| {
-            try h.put(&self.headers);
-        }
-        return self;
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.arena.deinit();
-        return;
-    }
-
-    /// converts object into a request body that can be sent
-    pub fn body(self: *Self) !std.ArrayList(u8) {
-        var buffer = std.ArrayList(u8).init(self.arena.allocator());
-        try buffer.appendSlice("GET ");
-        try buffer.appendSlice(self.endpoint);
-        try buffer.appendSlice(" HTTP/1.1 \r\n");
-        var headers_iter =
-            self.headers.iterator();
-        while (headers_iter.next()) |entry| {
-            try buffer.appendSlice(entry.key_ptr.*);
-            try buffer.appendSlice(": ");
-            try buffer.appendSlice(entry.value_ptr.*);
-            try buffer.appendSlice("\r\n");
-        }
-        return buffer;
-    }
-
-    pub fn parse(str: []u8, allocator: std.mem.Allocator) !Self {
-        log.info("parsing: {s}\n", .{str});
-        var line_split = std.mem.splitSequence(u8, str, "\r\n");
-        const leading_line = line_split.first();
-        const headers_buffer = line_split.buffer[leading_line.len..];
-        var leading_line_whitespace_split = std.mem.splitScalar(u8, leading_line, ' ');
-
-        const method = Method.parse(leading_line_whitespace_split.first()) orelse return error.InvalidLeadingLine;
-        if (method != Method.get) {
-            log.err("Invalid method, got: {any}\n", .{method});
-            return error.InvalidMethod;
-        }
-        const endpoint = leading_line_whitespace_split.next() orelse {
-            log.err("Did not get endpoint\n", .{});
-            return error.InvalidLeadingLine;
-        };
-        const http_version = leading_line_whitespace_split.next() orelse {
-            log.err("Did not get http_version\n", .{});
-            return error.InvalidLeadingLine;
-        };
-
-        log.info("Method: {any}\nendpoint: {s}\nhttp_version: {s}\n", .{ method, endpoint, http_version });
-        var self = try Self.init(endpoint, allocator);
-
-        log.info("parsing headers from buffer: {s}\n", .{headers_buffer});
-        var headers_split = std.mem.splitSequence(u8, headers_buffer, "\r\n");
-
-        const buffer_size: comptime_int = 64;
-        var current_key: [buffer_size]u8 = undefined;
-        @memset(&current_key, 0);
-        var current_key_len: usize = 0;
-
-        var buf: [buffer_size]u8 = undefined;
-        @memset(&buf, 0);
-        var cursor: usize = 0;
-
-        while (headers_split.next()) |this_header| {
-            if (std.mem.trim(u8, this_header, " ").len == 0) {
-                continue;
-            }
-            for (this_header) |char| {
-                switch (char) {
-                    ' ' => {
-                        if (buf.len != 0) {
-                            buf[cursor] = char;
-                            cursor += 1;
-                            std.debug.assert(cursor < buffer_size);
-                        }
-                    },
-                    ':' => {
-                        @memcpy(&current_key, &buf);
-                        current_key_len = cursor;
-                        log.info("setting key to: {s}\n", .{current_key[0..current_key_len]});
-                        cursor = 0;
-                    },
-                    else => {
-                        buf[cursor] = char;
-                        cursor += 1;
-                        std.debug.assert(cursor < buffer_size);
-                    },
-                }
-            }
-            if (current_key_len != 0) {
-                const trimmed_key =
-                    std.mem.trim(u8, current_key[0..current_key_len], " ");
-                const trimmed_val =
-                    std.mem.trim(u8, buf[0..cursor], " ");
-                const key = try self.arena.allocator().alloc(u8, trimmed_key.len);
-                const val = try self.arena.allocator().alloc(u8, trimmed_val.len);
-                @memcpy(key, trimmed_key);
-                @memcpy(val, trimmed_val);
-                log.info("inserting val: {s} into key: {s}\n", .{ val, key });
-                try self.headers.put(key, val);
-                current_key_len = 0;
-                cursor = 0;
-            } else {
-                log.err("did not get a key for header buffer: {s}\n", .{this_header});
-            }
-        }
-        return self;
-    }
-};
-
-test "client handshake building" {
-    const allocator = std.testing.allocator;
-    const headers: [4]ExpectedHeader =
-        .{
-        ExpectedHeader.from(ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
-        ExpectedHeader.from(ExpectedHeader.Host, "127.0.0.1"),
-        ExpectedHeader.from(ExpectedHeader.Version, "13"),
-        ExpectedHeader.from(ExpectedHeader.Protocol, "chat, superchat"),
-    };
-
-    var handshake = try ClientHandshake.init_with_headers("/chat", &headers, allocator);
-    defer handshake.deinit();
-    const body = try handshake.body();
-    defer body.deinit();
-    std.debug.print("BODY: {s}\n", .{body.items});
-    std.debug.print("CLIENT HANDSHAKE BUILDING PASSED\n", .{});
-}
-
-test "client handshake parsing" {
-    const allocator = std.testing.allocator;
-
-    const headers: [4]ExpectedHeader =
-        .{
-        ExpectedHeader.from(ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
-        ExpectedHeader.from(ExpectedHeader.Host, "127.0.0.1"),
-        ExpectedHeader.from(ExpectedHeader.Version, "13"),
-        ExpectedHeader.from(ExpectedHeader.Protocol, "chat, superchat"),
-    };
-    var expected_handshake = try ClientHandshake.init_with_headers("/chat", &headers, allocator);
-    defer expected_handshake.deinit();
-    const body = try expected_handshake.body();
-    defer body.deinit();
-
-    var handshake = try ClientHandshake.parse(body.items, allocator);
-    defer handshake.deinit();
-
-    if (!std.mem.eql(u8, handshake.endpoint, expected_handshake.endpoint)) {
-        std.debug.panic("endpoints do not match, expected={s}\ngot={s}\n", .{ expected_handshake.endpoint, handshake.endpoint });
-    }
-    var got_iter = handshake.headers.iterator();
-
-    while (got_iter.next()) |entry| {
-        log.warn("ENTRY:\nKEY: {s}\nVAL: {s}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
-        const got = expected_handshake.headers.get(entry.key_ptr.*) orelse std.debug.panic("expected handshake does not have entry for key: {s}\n", .{entry.key_ptr.*});
-        if (!std.mem.eql(u8, got, entry.value_ptr.*)) {
-            std.debug.panic("expected value: {s} for key {s}\ngot={s}\n", .{ entry.value_ptr.*, entry.key_ptr.*, got });
-        }
-    }
-
-    std.debug.print("HANDSHAKE PARSING PASSED\n", .{});
-}
 
 test "parse method" {
     const get = "GET";
     const get_method = Method.parse(get) orelse std.debug.panic("Failed to parse get method", .{});
     try std.testing.expectEqual(Method.get, get_method);
     std.debug.print("METHOD PARSING PASSED\n", .{});
-}
-
-test "all in header map" {
-    const allocator = std.testing.allocator;
-    const headers: [4]ExpectedHeader =
-        .{
-        ExpectedHeader.from(ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
-        ExpectedHeader.from(ExpectedHeader.Host, "127.0.0.1"),
-        ExpectedHeader.from(ExpectedHeader.Version, "13"),
-        ExpectedHeader.from(ExpectedHeader.Protocol, "chat, superchat"),
-    };
-    var handshake = try ClientHandshake.init_with_headers("/chat", &headers, allocator);
-    defer handshake.deinit();
-
-    const all = try ExpectedHeader.all_in_header_map(handshake.headers, allocator);
-    defer all.deinit();
-
-    for (headers) |h_item| {
-        var found = false;
-
-        for (all.items) |item| {
-            switch (h_item) {
-                .host => |_| {
-                    switch (item) {
-                        .host => {
-                            found = true;
-                        },
-                        else => {},
-                    }
-                },
-                .origin => |_| {
-                    switch (item) {
-                        .origin => {
-                            found = true;
-                        },
-                        else => {},
-                    }
-                },
-                .key => |_| {
-                    switch (item) {
-                        .key => {
-                            found = true;
-                        },
-                        else => {},
-                    }
-                },
-                .version => |_| {
-                    switch (item) {
-                        .version => {
-                            found = true;
-                        },
-                        else => {},
-                    }
-                },
-                .protocol => |_| {
-                    switch (item) {
-                        .protocol => {
-                            found = true;
-                        },
-                        else => {},
-                    }
-                },
-                .accept => |_| {
-                    switch (item) {
-                        .accept => {
-                            found = true;
-                        },
-                        else => {},
-                    }
-                },
-            }
-        }
-
-        if (!found) {
-            std.debug.panic("expected to find header: {any}", .{h_item});
-        }
-    }
-
-    std.debug.print("ALL IN HEADERS PASSED\n", .{});
 }
 
 test "Websocket URI parsing works" {
