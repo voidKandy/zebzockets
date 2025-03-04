@@ -63,13 +63,14 @@ const ClientHandshake = struct {
     host: zebzockets.ExpectedHeader.Host,
     key: zebzockets.ExpectedHeader.Key,
     version: zebzockets.ExpectedHeader.Version,
+    connection: zebzockets.ExpectedHeader.Connection,
     upgrade: zebzockets.ExpectedHeader.Upgrade,
     protocol: zebzockets.ExpectedHeader.Protocol,
     origin: ?zebzockets.ExpectedHeader.Origin,
     extensions: ?zebzockets.ExpectedHeader.Extensions,
     const Self = @This();
 
-    const Builder = struct { host: ?zebzockets.ExpectedHeader.Host = null, key: ?zebzockets.ExpectedHeader.Key = null, version: ?zebzockets.ExpectedHeader.Version = null, upgrade: ?zebzockets.ExpectedHeader.Upgrade = null, protocol: ?zebzockets.ExpectedHeader.Protocol = null, origin: ?zebzockets.ExpectedHeader.Origin = null, extensions: ?zebzockets.ExpectedHeader.Extensions = null };
+    const Builder = struct { host: ?zebzockets.ExpectedHeader.Host = null, connection: ?zebzockets.ExpectedHeader.Connection = null, key: ?zebzockets.ExpectedHeader.Key = null, version: ?zebzockets.ExpectedHeader.Version = null, upgrade: ?zebzockets.ExpectedHeader.Upgrade = null, protocol: ?zebzockets.ExpectedHeader.Protocol = null, origin: ?zebzockets.ExpectedHeader.Origin = null, extensions: ?zebzockets.ExpectedHeader.Extensions = null };
 
     fn new() Builder {
         return Builder{};
@@ -82,6 +83,7 @@ const ClientHandshake = struct {
             .version = builder.version orelse return error.MissingField,
             .upgrade = builder.upgrade orelse return error.MissingField,
             .protocol = builder.protocol orelse return error.MissingField,
+            .connection = builder.connection orelse return error.MissingField,
             .origin = builder.origin,
             .extensions = builder.extensions,
         };
@@ -118,6 +120,7 @@ const ClientHandshake = struct {
                     .upgrade => |i| builder.upgrade = i,
                     .protocol => |i| builder.protocol = i,
                     .origin => |i| builder.origin = i,
+                    .connection => |i| builder.connection = i,
                     .extensions => |i| builder.extensions = i,
                     else => |i| log.warn("ignoring header: {any}\n", .{i}),
                 }
@@ -194,5 +197,12 @@ test "ClientHandshake from message works" {
     @memcpy(msg, message);
 
     log.warn("getting handshake from:\n{s}\n", .{msg});
-    _ = try ClientHandshake.try_from_message(msg);
+    const hs = try ClientHandshake.try_from_message(msg);
+    std.testing.expect(std.mem.eql(u8, hs.host.val, "server.example.com")) catch |err| log.warn("failed host check:\n{any}\nval: {s}\n", .{ err, hs.host.val });
+    std.testing.expect(std.mem.eql(u8, hs.upgrade.val, "websocket")) catch |err| log.warn("failed upgrade check:\n{any}\nval: {s}\n", .{ err, hs.upgrade.val });
+    std.testing.expect(std.mem.eql(u8, hs.connection.val, "Upgrade")) catch |err| log.warn("failed connection check:\n{any}\nval: {s}\n", .{ err, hs.connection.val });
+    std.testing.expect(std.mem.eql(u8, hs.key.val, "dGhlIHNhbXBsZSBub25jZQ==")) catch |err| log.warn("failed key check:\n{any}\nval: {s}\n", .{ err, hs.key.val });
+    std.testing.expect(std.mem.eql(u8, hs.origin.?.val, "http://example.com")) catch |err| log.warn("failed origin check:\n{any}\nval: {s}\n", .{ err, hs.origin.?.val });
+    std.testing.expect(std.mem.eql(u8, hs.protocol.val, "chat, superchat")) catch |err| log.warn("failed protocol check:\n{any}\nval: {s}\n", .{ err, hs.protocol.val });
+    std.testing.expect(std.mem.eql(u8, hs.version.val, "13")) catch |err| log.warn("failed version check:\n{any}\nval: {s}\n", .{ err, hs.version.val });
 }
