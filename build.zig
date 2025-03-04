@@ -15,19 +15,21 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
-    const lib = b.addStaticLibrary(.{
-        .name = "zebzockets",
-        // In this case the main source file is merely a path, however, in more
-        // complicated build scripts, this could be a generated file.
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const zebzockets = b.addModule("zebzockets", .{ .root_source_file = b.path("src/root.zig") });
+
+    // const lib = b.addStaticLibrary(.{
+    //     .name = "zebzockets",
+    //     // In this case the main source file is merely a path, however, in more
+    //     // complicated build scripts, this could be a generated file.
+    //     .root_source_file = b.path("src/root.zig"),
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
 
     // This declares intent for the library to be installed into the standard
     // location when the user invokes the "install" step (the default step when
     // running `zig build`).
-    b.installArtifact(lib);
+    // b.installArtifact(lib);
 
     const client = b.addExecutable(.{
         .name = "zebzockets_client",
@@ -36,7 +38,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    client.root_module.addImport("zebzockets", &lib.root_module);
+    client.root_module.addImport("zebzockets", zebzockets);
     b.installArtifact(client);
     const client_exe = b.addRunArtifact(client);
     const run_client_step = b.step("run_client", "Run client");
@@ -57,7 +59,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    server.root_module.addImport("zebzockets", &lib.root_module);
+    server.root_module.addImport("zebzockets", zebzockets);
     b.installArtifact(server);
     const server_exe = b.addRunArtifact(server);
     const run_server_step = b.step("run_server", "Run server");
@@ -76,6 +78,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // lib_unit_tests.root_module.addImport("zebzockets", zebzockets);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
 
@@ -85,7 +88,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     // I guess this must be included??
-    client_unit_tests.root_module.addImport("zebzockets", &lib.root_module);
+    client_unit_tests.root_module.addImport("zebzockets", zebzockets);
 
     const run_client_unit_tests = b.addRunArtifact(client_unit_tests);
 
@@ -94,13 +97,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    server_unit_tests.root_module.addImport("zebzockets", zebzockets);
 
     const run_server_unit_tests = b.addRunArtifact(server_unit_tests);
 
     // the `zig build --help` menu, providing a way for the user to request
     // running the unit tests.
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&lib.step);
+    // test_step.dependOn(&zebzockets.step);
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_client_unit_tests.step);
     test_step.dependOn(&run_server_unit_tests.step);

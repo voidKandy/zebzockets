@@ -93,7 +93,7 @@ pub const WsUri = struct {
     }
 };
 
-const Method = enum {
+pub const Method = enum {
     options,
     get,
     head,
@@ -103,7 +103,7 @@ const Method = enum {
     trace,
     connect,
 
-    fn parse(str: []const u8) ?Method {
+    pub fn parse(str: []const u8) ?Method {
         inline for (@typeInfo(Method).Enum.fields) |method| {
             var uppercase: [method.name.len]u8 = undefined;
             @memset(&uppercase, 0);
@@ -120,7 +120,7 @@ const Method = enum {
 
 pub const HeaderMap =
     std.StringArrayHashMap([]const u8);
-const Tag = enum { host, origin, key, version, protocol, accept };
+const Tag = enum { host, origin, key, protocol, accept, extensions, version, upgrade, connection };
 /// Any headers that the WS protocol expects can be defined here
 /// Connection and Upgrade headers are not included because they can only be of a single value
 pub const ExpectedHeader = union(Tag) {
@@ -131,18 +131,36 @@ pub const ExpectedHeader = union(Tag) {
     /// Base-64 encoded string that the server concatenates with a Globally Unique Identifier
     /// This concatenated string is then Sha-1 hashed, Base-64 encoded and returned to the client
     key: Key,
-    version: Version,
     protocol: Protocol,
     accept: Accept,
+
+    extensions: Extensions,
+    /// **Always** "13"
+    version: Version,
+    /// **Always** contains "websocket"
+    upgrade: Upgrade,
+    /// **Always** "Upgrade"
+    connection: Connection,
 
     const Self = @This();
 
     pub const Host = Self.Inner("Host");
     pub const Origin = Self.Inner("Origin");
     pub const Key = Self.Inner("Sec-WebSocket-Key");
-    pub const Version = Self.Inner("Sec-WebSocket-Version");
     pub const Protocol = Self.Inner("Sec-WebSocket-Protocol");
     pub const Accept = Self.Inner("Sec-WebSocket-Accept");
+    pub const Extensions = Self.Inner("Sec-WebSocket-Extensions");
+
+    pub const Version = Self.Inner("Sec-WebSocket-Version");
+    pub const Upgrade = Self.Inner("Upgrade");
+    pub const Connection = Self.Inner("Connection");
+
+    pub const VERSION =
+        Version.new("13");
+    pub const UPGRADE =
+        Upgrade.new("websocket");
+    pub const CONNECTION =
+        Connection.new("Upgrade");
 
     fn Inner(
         comptime KeyStr: []const u8,
@@ -150,6 +168,7 @@ pub const ExpectedHeader = union(Tag) {
         return struct {
             const MyKey = KeyStr;
             const InnerSelf = @This();
+
             val: []const u8,
             // for runtime access of KeyStr from instance
             fn key(self: InnerSelf) []const u8 {
@@ -198,6 +217,9 @@ pub const ExpectedHeader = union(Tag) {
             .version => |f| .{ .key = f.key(), .val = f.val },
             .protocol => |f| .{ .key = f.key(), .val = f.val },
             .accept => |f| .{ .key = f.key(), .val = f.val },
+            .upgrade => |f| .{ .key = f.key(), .val = f.val },
+            .connection => |f| .{ .key = f.key(), .val = f.val },
+            .extensions => |f| .{ .key = f.key(), .val = f.val },
         };
 
         return map.put(info.key, info.val);
@@ -219,13 +241,11 @@ test "parse method" {
     const get = "GET";
     const get_method = Method.parse(get) orelse std.debug.panic("Failed to parse get method", .{});
     try std.testing.expectEqual(Method.get, get_method);
-    std.debug.print("METHOD PARSING PASSED\n", .{});
 }
 
 test "Expected Header from str" {
     const header = ExpectedHeader.try_from_str("Host: www.example.com") orelse return error.Fail;
     _ = header;
-    std.debug.print("HEADER FROM STRING PASSED\n", .{});
 }
 
 test "Websocket URI parsing works" {
@@ -292,6 +312,4 @@ test "Websocket URI parsing works" {
             });
         }
     }
-
-    std.debug.print("WEBSOCKET URI PARSING PASSED\n", .{});
 }

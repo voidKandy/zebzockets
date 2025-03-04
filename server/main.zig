@@ -29,25 +29,18 @@ pub fn main() !void {
     print("Connection received! {} is sending data.\n", .{client.address});
 
     const message = try client.stream.reader().readAllAlloc(allocator, 1024);
-    var client_handshake = try zebzockets.ClientHandshake.parse(message, allocator);
-    defer client_handshake.deinit();
-    log.warn("parsed handshake: {any}\n", .{client_handshake});
-    const handshake = try ServerHandshake.from_client_handshake(&client_handshake, allocator);
-    log.warn("built handshake: {any}\n", .{handshake});
-    defer handshake.deinit();
+    // var client_handshake = try zebzockets.ClientHandshake.parse(message, allocator);
+    // defer client_handshake.deinit();
+    // log.warn("parsed handshake: {any}\n", .{client_handshake});
+    // const handshake = try ServerHandshake.from_client_handshake(&client_handshake, allocator);
+    // log.warn("built handshake: {any}\n", .{handshake});
+    // defer handshake.deinit();
     defer allocator.free(message);
 
     print("{} says {s}\n", .{ client.address, message });
 }
 
 pub const ServerHandshake = struct {
-    // there must be some better way of creating configs
-    // const Config = struct {
-    //     accept: []const u8,
-    //     protocol: []const u8,
-    //     const PROTOCOL = "Sec-WebSocket-Protocol";
-    //     const ACCEPT = "Sec-WebSocket-Accept";
-    // };
     headers: zebzockets.HeaderMap,
     arena: std.heap.ArenaAllocator,
     const Self = @This();
@@ -66,9 +59,73 @@ pub const ServerHandshake = struct {
     // }
 };
 
-fn handle_client_handshake_msg(msg: []u8) void {
-    std.mem.splitSequence(u8, msg, '\n');
-}
+const ClientHandshake = struct {
+    host: zebzockets.ExpectedHeader.Host,
+    key: zebzockets.ExpectedHeader.Key,
+    version: zebzockets.ExpectedHeader.Version,
+    upgrade: zebzockets.ExpectedHeader.Upgrade,
+    protocol: zebzockets.ExpectedHeader.Protocol,
+    origin: ?zebzockets.ExpectedHeader.Origin,
+    extensions: ?zebzockets.ExpectedHeader.Extensions,
+    const Self = @This();
+
+    const Builder = struct { host: ?zebzockets.ExpectedHeader.Host = null, key: ?zebzockets.ExpectedHeader.Key = null, version: ?zebzockets.ExpectedHeader.Version = null, upgrade: ?zebzockets.ExpectedHeader.Upgrade = null, protocol: ?zebzockets.ExpectedHeader.Protocol = null, origin: ?zebzockets.ExpectedHeader.Origin = null, extensions: ?zebzockets.ExpectedHeader.Extensions = null };
+
+    fn new() Builder {
+        return Builder{};
+    }
+
+    fn build(builder: Builder) !Self {
+        return Self{
+            .host = builder.host orelse return error.MissingField,
+            .key = builder.key orelse return error.MissingField,
+            .version = builder.version orelse return error.MissingField,
+            .upgrade = builder.upgrade orelse return error.MissingField,
+            .protocol = builder.protocol orelse return error.MissingField,
+            .origin = builder.origin,
+            .extensions = builder.extensions,
+        };
+    }
+    fn try_from_message(msg: []u8) !ClientHandshake {
+        var lines = std.mem.splitScalar(u8, msg, '\n');
+
+        const leading_line = lines.first();
+        var leading_line_whitespace_split = std.mem.splitScalar(u8, leading_line, ' ');
+
+        const method = zebzockets.Method.parse(leading_line_whitespace_split.first()) orelse return error.InvalidLeadingLine;
+        if (method != zebzockets.Method.get) {
+            log.err("Invalid method, got: {any}\n", .{method});
+            return error.InvalidMethod;
+        }
+        const path = leading_line_whitespace_split.next() orelse {
+            log.err("Did not get path\n", .{});
+            return error.InvalidLeadingLine;
+        };
+        const http_version = leading_line_whitespace_split.next() orelse {
+            log.err("Did not get http_version\n", .{});
+            return error.InvalidLeadingLine;
+        };
+
+        log.info("Method: {any}\npath: {s}\nhttp_version: {s}\n", .{ method, path, http_version });
+
+        var builder = ClientHandshake.new();
+        while (lines.next()) |line| {
+            if (zebzockets.ExpectedHeader.try_from_str(line)) |header| {
+                switch (header) {
+                    .host => |i| builder.host = i,
+                    .key => |i| builder.key = i,
+                    .version => |i| builder.version = i,
+                    .upgrade => |i| builder.upgrade = i,
+                    .protocol => |i| builder.protocol = i,
+                    .origin => |i| builder.origin = i,
+                    .extensions => |i| builder.extensions = i,
+                    else => |i| log.warn("ignoring header: {any}\n", .{i}),
+                }
+            }
+        }
+        return ClientHandshake.build(builder);
+    }
+};
 
 const Sha1 = std.crypto.hash.Sha1;
 /// Concatenates a UUID to the given key and returns a Hash of the combination
@@ -115,4 +172,27 @@ test "process key" {
     defer allocator.free(base64);
     log.warn("Hashed Value: {s}\nEncoded: {s}\n", .{ hashed, base64 });
     print("PASSED PROCESS KEY\n", .{});
+}
+
+test "ClientHandshake from message works" {
+    const message_str =
+        \\ GET /chat HTTP/1.1
+        \\ Host: server.example.com
+        \\ Upgrade: websocket
+        \\ Connection: Upgrade
+        \\ Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==
+        \\ Origin: http://example.com
+        \\ Sec-WebSocket-Protocol: chat, superchat
+        \\ Sec-WebSocket-Version: 13
+    ;
+    const message = std.mem.trim(u8, message_str, " \n");
+
+    const allocator = std.testing.allocator;
+
+    const msg = try allocator.alloc(u8, message.len);
+    defer allocator.free(msg);
+    @memcpy(msg, message);
+
+    log.warn("getting handshake from:\n{s}\n", .{msg});
+    _ = try ClientHandshake.try_from_message(msg);
 }

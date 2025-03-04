@@ -4,11 +4,6 @@ const net = std.net;
 const print = std.debug.print;
 const assert = std.debug.assert;
 
-const usage =
-    \\ usage: <binary-name> [<host>:<port>]|--help
-    \\ To use default host and port values simply pass ':'
-;
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -104,5 +99,4 @@ test "client handshake building" {
     const body = try handshake.body();
     defer body.deinit();
     std.debug.print("BODY: {s}\n", .{body.items});
-    std.debug.print("CLIENT HANDSHAKE BUILDING PASSED\n", .{});
 }
