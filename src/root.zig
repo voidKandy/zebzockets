@@ -182,7 +182,7 @@ pub const ExpectedHeader = union(Tag) {
     }
     /// Expects a *Single line* string
     pub fn try_from_str(str: []const u8) ?Self {
-        const colon_idx = std.mem.indexOfScalar(u8, str, ':').?;
+        const colon_idx = std.mem.indexOfScalar(u8, str, ':') orelse return null;
         const header = std.mem.trim(u8, str[0..colon_idx], " ");
         const val = std.mem.trim(u8, str[colon_idx + 1 ..], " ");
         inline for (@typeInfo(Self).Union.fields) |f| {

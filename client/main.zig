@@ -10,30 +10,37 @@ pub fn main() !void {
     const allocator = gpa.allocator();
     const args = zebzockets.cli.CliArgs.parse() orelse return;
     const peer = try std.net.Address.parseIp4(args.info.host, args.info.port);
+    var read_buffer: [1024]u8 = undefined;
+
     const stream = try net.tcpConnectToAddress(peer);
     defer stream.close();
+    var writer = stream.writer();
+    var reader = stream.reader();
     print("Connecting to {}\n", .{peer});
 
-    const headers: [3]zebzockets.ExpectedHeader =
+    const headers: [2]zebzockets.ExpectedHeader =
         .{
         zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
-        zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Version, "13"),
         zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Protocol, "chat, superchat"),
     };
+    // shoudl be a cli arg
     const uri = try zebzockets.WsUri.from_str("ws://127.0.0.1/chat");
-    var handshake = try ClientHandshake.init_with_headers(uri, &headers, allocator);
+    var handshake = try Handshake.init_with_headers(uri, &headers, allocator);
     defer handshake.deinit();
     const body =
         try handshake.body();
     defer body.deinit();
-    var writer = stream.writer();
     const size = try writer.write(body.items);
     print("Sending '{s}' to peer, total written: {d} bytes\n", .{ body.items, size });
+    const len = try reader.read(&read_buffer);
+    const response = read_buffer[0..len];
+
+    print("server says {s}\n", .{response});
     // Or just using `writer.writeAll`
     // try writer.writeAll("hello zig");
 }
 
-pub const ClientHandshake = struct {
+const Handshake = struct {
     headers: zebzockets.HeaderMap,
     uri: zebzockets.WsUri,
     arena: std.heap.ArenaAllocator,
@@ -42,8 +49,12 @@ pub const ClientHandshake = struct {
     pub fn init(uri: zebzockets.WsUri, allocator: std.mem.Allocator) !Self {
         var arena = std.heap.ArenaAllocator.init(allocator);
         var headers = zebzockets.HeaderMap.init(arena.allocator());
-        try headers.put("Upgrade", "websocket");
-        try headers.put("Connection", "Upgrade");
+        const v = zebzockets.ExpectedHeader{ .version = zebzockets.ExpectedHeader.VERSION };
+        try v.put(&headers);
+        const u = zebzockets.ExpectedHeader{ .upgrade = zebzockets.ExpectedHeader.UPGRADE };
+        try u.put(&headers);
+        const c = zebzockets.ExpectedHeader{ .connection = zebzockets.ExpectedHeader.CONNECTION };
+        try c.put(&headers);
 
         const host_value = try std.fmt.allocPrint(arena.allocator(), "{s}:{s}", .{ uri.host, uri.port });
         const host_header = zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Host, host_value);
@@ -87,14 +98,13 @@ pub const ClientHandshake = struct {
 
 test "client handshake building" {
     const allocator = std.testing.allocator;
-    const headers: [3]zebzockets.ExpectedHeader =
+    const headers: [2]zebzockets.ExpectedHeader =
         .{
         zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Key, "dGhlIHNhbXBsZSBub25jZQ=="),
-        zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Version, "13"),
         zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Protocol, "chat, superchat"),
     };
     const uri = try zebzockets.WsUri.from_str("ws://127.0.0.1/chat");
-    var handshake = try ClientHandshake.init_with_headers(uri, &headers, allocator);
+    var handshake = try Handshake.init_with_headers(uri, &headers, allocator);
     defer handshake.deinit();
     const body = try handshake.body();
     defer body.deinit();
