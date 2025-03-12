@@ -282,6 +282,79 @@ pub const Frame = struct {
 
         return arr;
     }
+
+    // this reader could be constrained more but fuq it
+    pub fn read(reader: anytype, allocator: std.mem.Allocator) !Frame {
+        const first_byte: u8 = (try reader.readBytesNoEof(1))[0];
+        const second_byte: u8 = (try reader.readBytesNoEof(1))[0];
+        std.log.debug("first byte: {b}\nsecond: {b}\n", .{ first_byte, second_byte });
+
+        // https://www.geeksforgeeks.org/extract-bits-in-c/
+        const fin: u1 = @truncate((first_byte >> 0) & 1 << 0);
+        const rsv1: u1 = @truncate((first_byte >> 1) & 1 << 1);
+        const rsv2: u1 = @truncate((first_byte >> 2) & 1 << 2);
+        const rsv3: u1 = @truncate((first_byte >> 3) & 1 << 3);
+
+        const opcode_int: u4 = @intCast(first_byte & 0x0F);
+        std.log.debug("opcode int: {x}\n", .{opcode_int});
+        const opcode: OpCode = @enumFromInt(opcode_int);
+        const mask: u1 = @truncate(second_byte >> 7);
+        const payload_size: u7 = @truncate(second_byte & 0x7F);
+
+        std.log.warn(
+            \\ fin: {d}
+            \\ rsv1: {d}
+            \\ rsv2: {d}
+            \\ rsv3: {d}
+            \\ opcode: {any}
+            \\ mask: {d}
+            \\ payload_size: {d}
+        , .{
+            fin,
+            rsv1,
+            rsv2,
+            rsv3,
+            opcode,
+            mask,
+            payload_size,
+        });
+        const size = if (mask == 1) payload_size + @bitSizeOf(MaskingKey) / 8 else payload_size;
+        var rest_bytes = try allocator.alloc(u8, size);
+        defer allocator.free(rest_bytes);
+        const read_amt = try reader.read(rest_bytes);
+        std.debug.assert(read_amt == size);
+
+        const masking_key: ?MaskingKey = blk: {
+            if (mask == 1) {
+                var k: [4]u8 = std.mem.zeroes([4]u8);
+                @memcpy(&k, rest_bytes[0..4]);
+                break :blk k;
+            } else {
+                break :blk null;
+            }
+        };
+        std.log.warn("masking key: {any}\n", .{masking_key});
+        var payload = if (masking_key) |_| rest_bytes[4..] else rest_bytes;
+        if (masking_key) |k| {
+            mask_data(k, &payload);
+        }
+        std.log.warn("payload: {s}\n", .{payload});
+
+        const payload_data = PayloadData.new().application_data(payload).finish();
+
+        return Frame{
+            .fin = fin,
+            .rsv1 = rsv1,
+            .rsv2 = rsv2,
+            .rsv3 = rsv3,
+            .mask = mask,
+            .opcode = opcode,
+            .payload_length = payload_size,
+            .extended_payload_length = null,
+            .masking_key = masking_key,
+            .payload_data = payload_data,
+        };
+    }
 };
 
 test "masking works" {
