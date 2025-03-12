@@ -296,12 +296,11 @@ pub const Frame = struct {
         const rsv3: u1 = @truncate((first_byte >> 3) & 1 << 3);
 
         const opcode_int: u4 = @intCast(first_byte & 0x0F);
-        std.log.debug("opcode int: {x}\n", .{opcode_int});
         const opcode: OpCode = @enumFromInt(opcode_int);
         const mask: u1 = @truncate(second_byte >> 7);
         const payload_size: u7 = @truncate(second_byte & 0x7F);
 
-        std.log.warn(
+        std.log.debug(
             \\ fin: {d}
             \\ rsv1: {d}
             \\ rsv2: {d}
@@ -333,12 +332,12 @@ pub const Frame = struct {
                 break :blk null;
             }
         };
-        std.log.warn("masking key: {any}\n", .{masking_key});
+        std.log.debug("masking key: {any}\n", .{masking_key});
         var payload = if (masking_key) |_| rest_bytes[4..] else rest_bytes;
         if (masking_key) |k| {
             mask_data(k, &payload);
         }
-        std.log.warn("payload: {s}\n", .{payload});
+        std.log.debug("payload: {s}\n", .{payload});
 
         const payload_data = PayloadData.new().application_data(payload).finish();
 
