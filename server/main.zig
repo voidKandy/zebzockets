@@ -1,5 +1,5 @@
 const std = @import("std");
-const zebzockets = @import("zebzockets");
+const zz = @import("zebzockets");
 const net = std.net;
 const log = std.log;
 const print = std.debug.print;
@@ -10,44 +10,56 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = zebzockets.cli.CliArgs.parse() orelse return;
+    const args = zz.cli.CliArgs.parse() orelse return;
 
-    const loopback = try std.net.Ip4Address.parse(args.info.host, args.info.port);
+    const addr = try net.Address.resolveIp(args.info.host, args.info.port);
+    var listener = try addr.listen(.{ .reuse_address = true });
+    defer listener.deinit();
 
-    const localhost = net.Address{ .in = loopback };
-    var server = try localhost.listen(.{
-        .reuse_address = true,
-    });
-    var read_buffer: [1024]u8 = undefined;
-    defer server.deinit();
+    print("Listening on {s}:{}, access this port to end the program\n", .{ args.info.host, listener.listen_address.getPort() });
 
-    const addr = server.listen_address;
-    print("Listening on {s}:{}, access this port to end the program\n", .{ args.info.host, addr.getPort() });
+    while (listener.accept() catch |e| blk: {
+        std.log.err("failed to accept a connection: {any}\n", .{e});
+        break :blk null;
+    }) |conn| {
+        defer conn.stream.close();
 
-    var client = try server.accept();
-    defer client.stream.close();
-    var writer = client.stream.writer();
-    var reader = client.stream.reader();
+        print("Connection received! {} is sending data.\n", .{conn.address});
+        var read_buffer: [4096]u8 = undefined;
+        var recv_total: usize = 0;
 
-    print("Connection received! {} is sending data.\n", .{client.address});
+        var writer = conn.stream.writer();
+        var reader = conn.stream.reader();
 
-    const len = try reader.read(&read_buffer);
-    const message = read_buffer[0..len];
-    print("{} says {s}\n", .{ client.address, message });
+        recv_total = try reader.read(&read_buffer);
+        const message = read_buffer[0..recv_total];
+        print("{} says {s}\n", .{ conn.address, message });
 
-    const client_handshake = try ClientHandshake.try_from_message(message);
-    var server_handshake = try Handshake.from_client_handshake(client_handshake, allocator);
-    log.warn("got server handshake\n", .{});
-    defer server_handshake.deinit();
+        const client_handshake = try ClientHandshake.try_from_message(message);
+        var server_handshake = try Handshake.from_client_handshake(client_handshake, allocator);
+        defer server_handshake.deinit();
 
-    const body = try server_handshake.body();
-    defer body.deinit();
-    const size = try writer.write(body.items);
-    print("Sending '{s}' to peer, total written: {d} bytes\n", .{ body.items, size });
+        const body = try server_handshake.body();
+        defer body.deinit();
+        const size = try writer.write(body.items);
+        print("Sending '{s}' to peer, total written: {d} bytes\n", .{ body.items, size });
+
+        while (true) {
+            const frame = try zz.frame.Frame.read(reader, allocator);
+            _ = frame;
+        }
+    }
 }
 
+pub const Server = struct {
+    pool: std.Thread.Pool,
+    const Self = @This();
+
+    // fn stuff(self: Self) void {}
+};
+
 pub const Handshake = struct {
-    headers: zebzockets.HeaderMap,
+    headers: zz.HeaderMap,
     arena: std.heap.ArenaAllocator,
     const Self = @This();
 
@@ -57,18 +69,18 @@ pub const Handshake = struct {
 
     fn from_client_handshake(hs: ClientHandshake, allocator: std.mem.Allocator) !Self {
         var arena = std.heap.ArenaAllocator.init(allocator);
-        var headers = zebzockets.HeaderMap.init(arena.allocator());
+        var headers = zz.HeaderMap.init(arena.allocator());
 
         const hashed = try hash_key(arena.allocator(), hs.key.val);
         const base64 = try base64_encode_digest(arena.allocator(), hashed);
-        const accept = zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Accept, base64);
-        const version = zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Version, hs.version.val);
-        const connection = zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Connection, hs.connection.val);
+        const accept = zz.ExpectedHeader.from(zz.ExpectedHeader.Accept, base64);
+        const version = zz.ExpectedHeader.from(zz.ExpectedHeader.Version, hs.version.val);
+        const connection = zz.ExpectedHeader.from(zz.ExpectedHeader.Connection, hs.connection.val);
 
         // do something with origin to validate?
-        var origin: ?zebzockets.ExpectedHeader = null;
+        var origin: ?zz.ExpectedHeader = null;
         if (hs.origin) |o| {
-            origin = zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Origin, o.val);
+            origin = zz.ExpectedHeader.from(zz.ExpectedHeader.Origin, o.val);
         }
         // validate resource exists
         _ = hs.resource;
@@ -76,7 +88,7 @@ pub const Handshake = struct {
         // choose subprotocol
         var protocols = std.mem.split(u8, hs.protocol.val, ",");
         const protocol =
-            zebzockets.ExpectedHeader.from(zebzockets.ExpectedHeader.Protocol, protocols.first());
+            zz.ExpectedHeader.from(zz.ExpectedHeader.Protocol, protocols.first());
 
         if (hs.extensions) |e| {
             _ = e;
@@ -114,17 +126,17 @@ pub const Handshake = struct {
 
 const ClientHandshake = struct {
     resource: []const u8,
-    host: zebzockets.ExpectedHeader.Host,
-    key: zebzockets.ExpectedHeader.Key,
-    version: zebzockets.ExpectedHeader.Version,
-    connection: zebzockets.ExpectedHeader.Connection,
-    upgrade: zebzockets.ExpectedHeader.Upgrade,
-    protocol: zebzockets.ExpectedHeader.Protocol,
-    origin: ?zebzockets.ExpectedHeader.Origin,
-    extensions: ?zebzockets.ExpectedHeader.Extensions,
+    host: zz.ExpectedHeader.Host,
+    key: zz.ExpectedHeader.Key,
+    version: zz.ExpectedHeader.Version,
+    connection: zz.ExpectedHeader.Connection,
+    upgrade: zz.ExpectedHeader.Upgrade,
+    protocol: zz.ExpectedHeader.Protocol,
+    origin: ?zz.ExpectedHeader.Origin,
+    extensions: ?zz.ExpectedHeader.Extensions,
     const Self = @This();
 
-    const Builder = struct { resource: ?[]const u8 = null, host: ?zebzockets.ExpectedHeader.Host = null, connection: ?zebzockets.ExpectedHeader.Connection = null, key: ?zebzockets.ExpectedHeader.Key = null, version: ?zebzockets.ExpectedHeader.Version = null, upgrade: ?zebzockets.ExpectedHeader.Upgrade = null, protocol: ?zebzockets.ExpectedHeader.Protocol = null, origin: ?zebzockets.ExpectedHeader.Origin = null, extensions: ?zebzockets.ExpectedHeader.Extensions = null };
+    const Builder = struct { resource: ?[]const u8 = null, host: ?zz.ExpectedHeader.Host = null, connection: ?zz.ExpectedHeader.Connection = null, key: ?zz.ExpectedHeader.Key = null, version: ?zz.ExpectedHeader.Version = null, upgrade: ?zz.ExpectedHeader.Upgrade = null, protocol: ?zz.ExpectedHeader.Protocol = null, origin: ?zz.ExpectedHeader.Origin = null, extensions: ?zz.ExpectedHeader.Extensions = null };
 
     fn new() Builder {
         return Builder{};
@@ -149,8 +161,8 @@ const ClientHandshake = struct {
         const leading_line = lines.first();
         var leading_line_whitespace_split = std.mem.splitScalar(u8, leading_line, ' ');
 
-        const method = zebzockets.Method.parse(leading_line_whitespace_split.first()) orelse return error.InvalidLeadingLine;
-        if (method != zebzockets.Method.get) {
+        const method = zz.Method.parse(leading_line_whitespace_split.first()) orelse return error.InvalidLeadingLine;
+        if (method != zz.Method.get) {
             log.err("Invalid method, got: {any}\n", .{method});
             return error.InvalidMethod;
         }
@@ -169,7 +181,7 @@ const ClientHandshake = struct {
         builder.resource = path;
         while (lines.next()) |line| {
             // log.warn("trying header from line: {s}\n", .{line});
-            if (zebzockets.ExpectedHeader.try_from_str(line)) |header| {
+            if (zz.ExpectedHeader.try_from_str(line)) |header| {
                 switch (header) {
                     .host => |i| builder.host = i,
                     .key => |i| builder.key = i,
@@ -263,5 +275,6 @@ test "ClientHandshake from message works" {
     std.testing.expect(std.mem.eql(u8, hs.protocol.val, "chat, superchat")) catch |err| log.warn("failed protocol check:\n{any}\nval: {s}\n", .{ err, hs.protocol.val });
     std.testing.expect(std.mem.eql(u8, hs.version.val, "13")) catch |err| log.warn("failed version check:\n{any}\nval: {s}\n", .{ err, hs.version.val });
 
-    _ = try Handshake.from_client_handshake(hs, allocator);
+    const handshake = try Handshake.from_client_handshake(hs, allocator);
+    defer handshake.deinit();
 }
