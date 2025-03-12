@@ -11,7 +11,7 @@ const std = @import("std");
 ///   *  %x9 denotes a ping
 ///   *  %xA denotes a pong
 ///   *  %xB-F are reserved for further control frames
-const OpCode = enum(u4) {
+pub const OpCode = enum(u4) {
     // non-control frames
     continuation = 0x0,
     text = 0x1,
@@ -37,7 +37,7 @@ const OpCode = enum(u4) {
     }
 };
 
-const PayloadData = struct {
+pub const PayloadData = struct {
     application_data: []u8,
     extension_data: []u8,
 
@@ -46,21 +46,21 @@ const PayloadData = struct {
         ext_data: ?[]u8 = null,
         masking_key: ?MaskingKey = null,
 
-        fn mask(self: Builder, key: MaskingKey) Builder {
+        pub fn mask(self: Builder, key: MaskingKey) Builder {
             return Builder{
                 .app_data = self.app_data,
                 .ext_data = self.ext_data,
                 .masking_key = key,
             };
         }
-        fn application_data(self: Builder, data: []u8) Builder {
+        pub fn application_data(self: Builder, data: []u8) Builder {
             return Builder{
                 .app_data = data,
                 .ext_data = self.ext_data,
                 .masking_key = self.masking_key,
             };
         }
-        fn extension_data(self: Builder, data: []u8) Builder {
+        pub fn extension_data(self: Builder, data: []u8) Builder {
             return Builder{
                 .app_data = self.app_data,
                 .ext_data = data,
@@ -69,7 +69,7 @@ const PayloadData = struct {
         }
 
         /// Returns a built `PayloadData`, masking if needed
-        fn finish(self: Builder) PayloadData {
+        pub fn finish(self: Builder) PayloadData {
             var app_data: []u8 = self.app_data orelse blk: {
                 std.log.warn("building PayloadData without application data\n", .{});
                 break :blk &[_]u8{};
@@ -89,7 +89,7 @@ const PayloadData = struct {
         }
     };
 
-    fn new() Builder {
+    pub fn new() Builder {
         return Builder{};
     }
 };
@@ -191,54 +191,56 @@ pub const Frame = struct {
         };
     }
 
-    /// Serialize `Frame` to `[]u8`
-    fn as_bytes(frame: Frame, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
-        // size in bytes
-        const size: usize = blk: {
-            var acc: usize = Frame.INITIAL_READ_SIZE / 8;
-            if (frame.masking_key) |k| {
-                acc += @sizeOf(@TypeOf(k));
+    /// size of frame in bytes
+    fn get_size(frame: Frame) usize {
+        var acc: usize = Frame.INITIAL_READ_SIZE / 8;
+        if (frame.masking_key) |k| {
+            acc += @sizeOf(@TypeOf(k));
+        }
+        // for payload len (u7) + mask flag (u1)
+        acc += 1;
+        if (frame.extended_payload_length) |ext| {
+            switch (ext) {
+                .sixteen => |l| {
+                    std.debug.assert(frame.payload_length == 126);
+                    acc += 16 / 8;
+                    acc += l;
+                },
+                .sixtyfour => |l| {
+                    std.debug.assert(frame.payload_length == 127);
+                    acc += 64 / 8;
+                    acc += l;
+                },
             }
-            // for payload len (u7) + mask flag (u1)
-            acc += 1;
-            if (frame.extended_payload_length) |ext| {
-                switch (ext) {
-                    .sixteen => |l| {
-                        std.debug.assert(frame.payload_length == 126);
-                        acc += 16 / 8;
-                        acc += l;
-                    },
-                    .sixtyfour => |l| {
-                        std.debug.assert(frame.payload_length == 127);
-                        acc += 64 / 8;
-                        acc += l;
-                    },
-                }
-            } else {
-                acc += frame.payload_length;
-            }
-            break :blk acc;
-        };
+        } else {
+            acc += frame.payload_length;
+        }
+        return acc;
+    }
 
+    /// Serialize `Frame` to `[]u8`
+    pub fn as_bytes(frame: Frame, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        std.log.warn("writing frame to bytes: {any}\n", .{frame});
+        const size = frame.get_size();
         std.log.warn("frame has {} bytes in arr\n", .{size});
         var arr = try allocator.alloc(u8, size);
         var idx: usize = 0;
 
         const first_byte =
-            ((@as(u8, @intCast(frame.fin)) << 0) |
-            (@as(u8, @intCast(frame.rsv1)) << 1) |
-            (@as(u8, @intCast(frame.rsv2)) << 2) |
-            (@as(u8, @intCast(frame.rsv3)) << 3) |
-            (@as(u8, @intFromEnum(frame.opcode)) << 4));
+            ((@as(u8, @intCast(frame.fin)) << 7) |
+            (@as(u8, @intCast(frame.rsv1)) << 6) |
+            (@as(u8, @intCast(frame.rsv2)) << 5) |
+            (@as(u8, @intCast(frame.rsv3)) << 4) |
+            (@as(u8, @intFromEnum(frame.opcode)) << 0));
         arr[idx] = first_byte;
-        // std.log.warn("first byte: {b}\n", .{first_byte});
+        std.log.warn("first byte: {b}\n", .{first_byte});
         idx += 1;
 
         const second_byte =
-            (@as(u8, @intCast(frame.mask)) |
-            frame.payload_length);
+            @as(u8, @intCast(frame.mask)) << 7 |
+            @as(u8, frame.payload_length);
         arr[idx] = second_byte;
-        std.log.warn("second byte: {x}\n", .{frame.payload_length});
+        std.log.warn("second byte: {b}\n", .{second_byte});
         idx += 1;
 
         if (frame.extended_payload_length) |l| {
@@ -428,7 +430,11 @@ test "Frame.as_bytes() works correctly" {
     const allocator = std.testing.allocator;
 
     const Case = struct {
-        frame: Frame,
+        fin: bool,
+        opcode: OpCode,
+        application_data: []u8,
+        mask: ?MaskingKey,
+        /// will be masked in the process of testing pass in unmasked data
         expected: []const u8,
     };
 
@@ -440,6 +446,14 @@ test "Frame.as_bytes() works correctly" {
     small_payload[0] = 1;
     small_payload[1] = 2;
     small_payload[2] = 3;
+
+    const string_payload = try allocator.alloc(u8, 5);
+    defer allocator.free(string_payload);
+    const string_payload_val =
+        "hello";
+    for (string_payload_val, 0..) |c, i| {
+        string_payload[i] = c;
+    }
 
     const masked_payload = try allocator.alloc(u8, 4);
     defer allocator.free(masked_payload);
@@ -456,22 +470,46 @@ test "Frame.as_bytes() works correctly" {
 
     const cases = [_]Case{
         Case{
-            .frame = Frame.build(false, OpCode.continuation, PayloadData.new().application_data(empty_payload).finish(), null),
+            .fin = false,
+            .opcode = OpCode.continuation,
+            .application_data = empty_payload,
+            .mask = null,
             .expected = &[_]u8{ 0x00, 0x00 },
         },
         Case{
-            .frame = Frame.build(true, OpCode.text, PayloadData.new().application_data(small_payload).finish(), null),
-            .expected = &[_]u8{ 0x11, 0x03, 0x01, 0x02, 0x03 },
+            .fin = true,
+            .opcode = OpCode.text,
+            .application_data = string_payload,
+            .mask = null,
+            .expected = &[_]u8{
+                0b10000001,        0b00000101,
+                string_payload[0], string_payload[1],
+                string_payload[2], string_payload[3],
+                string_payload[4],
+            },
         },
         Case{
-            .frame = Frame.build(true, OpCode.binary, PayloadData.new().application_data(masked_payload).finish(), [4]u8{ 0xAA, 0xBB, 0xCC, 0xDD }),
-            .expected = &[_]u8{ 0x21, 0x05, 0xAA, 0xBB, 0xCC, 0xDD, 0x01, 0x02, 0x03, 0x04 },
+            .fin = true,
+            .opcode = OpCode.text,
+            .application_data = small_payload,
+            .mask = null,
+            .expected = &[_]u8{ 0x81, 0x03, 0x01, 0x02, 0x03 },
         },
         Case{
-            .frame = Frame.build(false, OpCode.text, PayloadData.new().application_data(extended_payload).finish(), null),
+            .fin = true,
+            .opcode = OpCode.binary,
+            .application_data = masked_payload,
+            .mask = [4]u8{ 0xAA, 0xBB, 0xCC, 0xDD },
+            .expected = &[_]u8{ 0x82, 0x84, 0xAA, 0xBB, 0xCC, 0xDD, 0x01, 0x02, 0x03, 0x04 },
+        },
+        Case{
+            .fin = false,
+            .opcode = OpCode.text,
+            .application_data = extended_payload,
+            .mask = null,
             .expected = blk: {
                 var buf: [260]u8 = undefined;
-                buf[0] = 0x10;
+                buf[0] = 0x01;
                 buf[1] = 0x7E; // 126 in payload len + 0 mask
                 buf[2] = 0x01; // extended payload length
                 buf[3] = 0x00; // extended payload length
@@ -484,17 +522,28 @@ test "Frame.as_bytes() works correctly" {
     };
 
     for (cases, 1..) |case, i| {
-        const bytes = try case.frame.as_bytes(allocator);
+        const payload = blk: {
+            var b = PayloadData.new().application_data(case.application_data);
+            if (case.mask) |key| {
+                b = b.mask(key);
+            }
+            break :blk b.finish();
+        };
+        const frame = Frame.build(case.fin, case.opcode, payload, case.mask);
+        var expected: []u8 = try allocator.alloc(u8, case.expected.len);
+        defer allocator.free(expected);
+        @memcpy(expected, case.expected);
+        if (case.mask) |key| {
+            std.log.warn("masking expected data\n", .{});
+            const offset: usize =
+                frame.get_size() - case.application_data.len;
+            var slice = expected[offset..];
+            mask_data(key, &slice);
+        }
+        const bytes = try frame.as_bytes(allocator);
         defer allocator.free(bytes);
 
-        try std.testing.expectEqualSlices(u8, case.expected, bytes);
+        try std.testing.expectEqualSlices(u8, expected, bytes);
         std.log.warn("Case {d} passed", .{i});
     }
-}
-
-test "test masking operations" {
-    const i = @as(u8, @intCast(@as(u1, 1)));
-    try std.testing.expectEqual(i, 0b00000001);
-    const k = i | @as(u7, 4);
-    try std.testing.expectEqual(k, 0x05);
 }
