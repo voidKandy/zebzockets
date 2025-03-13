@@ -18,7 +18,14 @@ pub fn main() !void {
     var server = try Server.init(listener, allocator);
     defer server.deinit();
 
-    try server.main_loop();
+    var wg = std.Thread.WaitGroup{};
+    while (true) {
+        if (!wg.isDone()) {
+            server.pool.waitAndWork(&wg);
+        }
+        const conn = try server.listener.accept();
+        server.pool.spawnWg(&wg, Server.handle, .{conn});
+    }
 }
 
 pub const Server = struct {
@@ -45,40 +52,44 @@ pub const Server = struct {
         self.listener.deinit();
     }
 
-    fn main_loop(self: *Self) !void {
-        while (self.listener.accept() catch |e| blk: {
-            std.log.err("failed to accept a connection: {any}\n", .{e});
-            break :blk null;
-        }) |conn| {
-            defer conn.stream.close();
-            print("Connection received! {} is sending data.\n", .{conn.address});
-            var read_buffer: [4096]u8 = undefined;
-            var recv_total: usize = 0;
-
-            var writer = conn.stream.writer();
-            var reader = conn.stream.reader();
-
-            recv_total = try reader.read(&read_buffer);
-            const message = read_buffer[0..recv_total];
-            print("{} says {s}\n", .{ conn.address, message });
-
-            const client_handshake = try ClientHandshake.try_from_message(message);
-            var server_handshake = try Handshake.from_client_handshake(client_handshake, self.allocator);
-            defer server_handshake.deinit();
-
-            const body = try server_handshake.body();
-            defer body.deinit();
-            const size = try writer.write(body.items);
-            print("Sending '{s}' to peer, total written: {d} bytes\n", .{ body.items, size });
-
-            while (true) {
-                const frame = try zz.frame.Frame.read(reader, self.allocator);
-                _ = frame;
-            }
-        }
+    fn handle(conn: std.net.Server.Connection) void {
+        Self._handle(conn) catch |err| switch (err) {
+            // should have graceful close
+            // error.Closed => {},
+            else => std.debug.print("[{any}] client handle error: {}\n", .{ conn.address, err }),
+        };
     }
 
-    // fn stuff(self: Self) void {}
+    fn _handle(conn: std.net.Server.Connection) !void {
+        defer conn.stream.close();
+        var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+        defer _ = gpa.deinit();
+        const allocator = gpa.allocator();
+        print("Connection received! {} is sending data.\n", .{conn.address});
+        var read_buffer: [4096]u8 = undefined;
+        var recv_total: usize = 0;
+
+        var writer = conn.stream.writer();
+        var reader = conn.stream.reader();
+
+        recv_total = try reader.read(&read_buffer);
+        const message = read_buffer[0..recv_total];
+        print("{} says {s}\n", .{ conn.address, message });
+
+        const client_handshake = try ClientHandshake.try_from_message(message);
+        var server_handshake = try Handshake.from_client_handshake(client_handshake, allocator);
+        defer server_handshake.deinit();
+
+        const body = try server_handshake.body();
+        defer body.deinit();
+        const size = try writer.write(body.items);
+        print("Sending '{s}' to peer, total written: {d} bytes\n", .{ body.items, size });
+
+        while (true) {
+            const frame = try zz.frame.Frame.read(reader, allocator);
+            _ = frame;
+        }
+    }
 };
 
 pub const Handshake = struct {
