@@ -41,19 +41,24 @@ pub fn main() !void {
     }
 
     print("Established WS connection with server!\n", .{});
-    try run_prompt(allocator, writer);
+    var thread = try std.Thread.spawn(.{}, run_prompt, .{ allocator, writer });
+    thread.join();
 }
 
 fn run_prompt(allocator: std.mem.Allocator, writer: anytype) !void {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
+    const rand = std.crypto.random;
 
     while (true) {
         try stdout.print("> ", .{});
         var buffer: [1024]u8 = undefined;
 
         // need to generate this
-        const mask_key = [4]u8{ 8, 8, 8, 8 };
+        var mask_key = [_]u8{ 0, 0, 0, 0 };
+        for (0..4) |i| {
+            mask_key[i] = rand.int(u8);
+        }
 
         const result = try stdin.readUntilDelimiter(&buffer, '\n');
         const payload = zz.frame.PayloadData.new().application_data(result).mask(mask_key).finish();
