@@ -34,6 +34,10 @@ pub const Handshake = struct {
             extensions: ?root.ExpectedHeader.Extensions = null,
         };
 
+        pub fn is_ok(self: Self.Deserialized) bool {
+            return self.status_code == 101;
+        }
+
         pub fn new(http_version: []const u8, code: u16, message: []const u8) Builder {
             return Builder{
                 .http_version = http_version,
@@ -102,6 +106,7 @@ pub const Handshake = struct {
     pub fn body(self: *Self) std.mem.Allocator.Error!std.ArrayList(u8) {
         var buffer = std.ArrayList(u8).init(self.arena.allocator());
         // this http version should reflect the version in the client handshake
+        // also very BAD should handle a non okay
         try buffer.appendSlice("HTTP/1.1 101 Switching Protocols\r\n");
 
         var headers_iter =

@@ -7,26 +7,6 @@ pub const client_hs = @import("client_handshake.zig");
 const testing = std.testing;
 const log = std.log;
 
-pub const ConnectionState = enum {
-    open,
-    connecting,
-};
-
-pub const WebSocketConnection = struct {
-    state: ConnectionState,
-    const Self = @This();
-
-    pub fn new() Self {
-        return Self{ .state = ConnectionState.connecting };
-    }
-    pub fn is_open(self: *Self) bool {
-        return switch (self.state) {
-            ConnectionState.open => true,
-            ConnectionState.connecting => true,
-        };
-    }
-};
-
 pub const WsUri = struct {
     secure: bool,
     port: []const u8,

@@ -12,7 +12,6 @@ pub fn main() !void {
     const peer = try std.net.Address.parseIp4(args.info.host, args.info.port);
     var read_buffer: [1024]u8 = undefined;
 
-    var connection = zz.WebSocketConnection.new();
     const stream = try net.tcpConnectToAddress(peer);
     defer stream.close();
     var writer = stream.writer();
@@ -36,26 +35,16 @@ pub fn main() !void {
     const response = read_buffer[0..len];
     const server_handshake = try zz.server_hs.Handshake.try_from_bytes(response);
 
-    print("server says {any}\n", .{server_handshake});
-    connection.state = zz.ConnectionState.open;
-
-    const mask_key = [4]u8{ 8, 8, 8, 8 };
-    var str = try allocator.alloc(u8, 5);
-    defer allocator.free(str);
-    for ("hello", 0..) |c, i| {
-        str[i] = c;
+    if (!server_handshake.is_ok()) {
+        std.log.err("server returned non 200 status", .{});
+        return error.ServerRespondedNotOk;
     }
-    const payload = zz.frame.PayloadData.new().application_data(str).mask(mask_key).finish();
 
-    const frame = zz.frame.Frame.build(true, zz.frame.OpCode.text, payload, mask_key);
-    std.log.warn("frame: {any}", .{frame});
-    const bytes = try frame.as_bytes(allocator);
-    try writer.writeAll(bytes);
-
-    try run_prompt();
+    print("Established WS connection with server!\n", .{});
+    try run_prompt(allocator, writer);
 }
 
-fn run_prompt() !void {
+fn run_prompt(allocator: std.mem.Allocator, writer: anytype) !void {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
 
@@ -63,8 +52,15 @@ fn run_prompt() !void {
         try stdout.print("> ", .{});
         var buffer: [1024]u8 = undefined;
 
+        // need to generate this
+        const mask_key = [4]u8{ 8, 8, 8, 8 };
+
         const result = try stdin.readUntilDelimiter(&buffer, '\n');
-        _ = result;
-        try stdout.print("{s}", .{buffer});
+        const payload = zz.frame.PayloadData.new().application_data(result).mask(mask_key).finish();
+        const frame = zz.frame.Frame.build(true, zz.frame.OpCode.text, payload, mask_key);
+        std.log.warn("frame: {any}\n", .{frame});
+        const bytes = try frame.as_bytes(allocator);
+        try writer.writeAll(bytes);
+        try stdout.print("Sent Frame\n", .{});
     }
 }
