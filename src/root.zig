@@ -1,8 +1,31 @@
 //! Shared library for client and server
 const std = @import("std");
 pub const cli = @import("cli.zig");
+pub const frame = @import("frame.zig");
+pub const server_hs = @import("server_handshake.zig");
+pub const client_hs = @import("client_handshake.zig");
 const testing = std.testing;
 const log = std.log;
+
+pub const ConnectionState = enum {
+    open,
+    connecting,
+};
+
+pub const WebSocketConnection = struct {
+    state: ConnectionState,
+    const Self = @This();
+
+    pub fn new() Self {
+        return Self{ .state = ConnectionState.connecting };
+    }
+    pub fn is_open(self: *Self) bool {
+        return switch (self.state) {
+            ConnectionState.open => true,
+            ConnectionState.connecting => true,
+        };
+    }
+};
 
 pub const WsUri = struct {
     secure: bool,
