@@ -69,32 +69,29 @@ fn TestCase(
         const MyFrame =
             Frame(AppData, ExtData);
 
-        fn test_cases(comptime amt: usize, cases: [amt]Self, allocator: std.mem.Allocator) !void {
-            std.log.warn("Testing {s} --- {d} cases\n", .{ @typeName(AppData), amt });
-            for (0..amt) |i| {
-                const case = cases[i];
-                const frame = try MyFrame.init(.{
-                    .fin = case.fin,
-                    .opcode = case.opcode,
-                    .app_data = case.app_data,
-                    .ext_data = case.ext_data,
-                    .allocator = allocator,
-                });
-                defer frame.deinit();
+        fn test_case(case: Self, allocator: std.mem.Allocator) !void {
+            std.log.warn("TESTING {s}\n", .{@typeName(AppData)});
+            const frame = try MyFrame.init(.{
+                .fin = case.fin,
+                .opcode = case.opcode,
+                .app_data = case.app_data,
+                .ext_data = case.ext_data,
+                .allocator = allocator,
+            });
+            defer frame.deinit();
 
-                const payload = try frame.payload_data();
-                if (!std.meta.eql(payload.app_data, case.app_data)) {
-                    std.debug.panic("did not get expected payload app data value\nExpected: {?}\nGot: {?}\n", .{ payload.app_data, case.app_data });
-                }
-                if (!std.meta.eql(payload.ext_data, case.ext_data)) {
-                    std.debug.panic("did not get expected payload ext data value\nExpected: {?}\nGot: {?}\n", .{ payload.ext_data, case.ext_data });
-                }
-                const bytes = try frame.as_bytes(allocator);
-                defer allocator.free(bytes);
-
-                try std.testing.expectEqualSlices(u8, case.expected_bytes, bytes);
-                std.log.warn("Case {d} passed\n", .{i});
+            const payload = try frame.payload_data();
+            if (!std.meta.eql(payload.app_data, case.app_data)) {
+                std.debug.panic("did not get expected payload app data value\nExpected: {?}\nGot: {?}\n", .{ payload.app_data, case.app_data });
             }
+            if (!std.meta.eql(payload.ext_data, case.ext_data)) {
+                std.debug.panic("did not get expected payload ext data value\nExpected: {?}\nGot: {?}\n", .{ payload.ext_data, case.ext_data });
+            }
+            const bytes = try frame.as_bytes(allocator);
+            defer allocator.free(bytes);
+
+            try std.testing.expectEqualSlices(u8, case.expected_bytes, bytes);
+            std.log.warn("Case PASSED\n", .{});
         }
     };
 }
@@ -126,33 +123,28 @@ test "SizedByteData" {
     }.try_ser);
 
     const allocator = std.testing.allocator;
-    const case_type = TestCase(SizedByteData, NullExt);
 
-    const cases = [1]case_type{
-        .{
-            .fin = false,
-            .opcode = OpCode.text,
-            .app_data = SizedByteData.from(blk: {
-                var arr = std.mem.zeroes([SizedByteDataSize]u8);
-                arr[0] = 0x39;
-                arr[SizedByteDataSize - 1] = 0x86;
-                break :blk arr;
-            }),
-            .ext_data = NullExt.from(.{}),
-            .masking_key = null,
-            .expected_bytes = &blk: {
-                var buf: [SizedByteDataSize + 2]u8 = undefined;
-                buf[0] = 0x01;
-                buf[1] = @as(u8, SizedByteDataSize);
-                @memset(buf[2..], 0x0);
-                buf[2] = 0x39;
-                buf[SizedByteDataSize + 1] = 0x86;
-                break :blk buf;
-            },
+    try TestCase(SizedByteData, NullExt).test_case(.{
+        .fin = false,
+        .opcode = OpCode.text,
+        .app_data = SizedByteData.from(blk: {
+            var arr = std.mem.zeroes([SizedByteDataSize]u8);
+            arr[0] = 0x39;
+            arr[SizedByteDataSize - 1] = 0x86;
+            break :blk arr;
+        }),
+        .ext_data = NullExt.from(.{}),
+        .masking_key = null,
+        .expected_bytes = &blk: {
+            var buf: [SizedByteDataSize + 2]u8 = undefined;
+            buf[0] = 0x01;
+            buf[1] = @as(u8, SizedByteDataSize);
+            @memset(buf[2..], 0x0);
+            buf[2] = 0x39;
+            buf[SizedByteDataSize + 1] = 0x86;
+            break :blk buf;
         },
-    };
-
-    try case_type.test_cases(1, cases, allocator);
+    }, allocator);
 }
 
 test "masking works" {
