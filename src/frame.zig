@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 ///   Defines the interpretation of the "Payload data".  If an unknown
 ///   opcode is received, the receiving endpoint MUST _Fail the
@@ -121,16 +122,21 @@ fn mask_data(key: MaskingKey, data: *[]u8) void {
 
 pub fn ApplicationData(
     comptime Context: type,
-    comptime ToBytesError: type,
-    comptime ToBytesFn: *const fn (ctx: Context, a: std.mem.Allocator) ToBytesError![]u8,
+    comptime Error: type,
+    comptime ToBytesFn: *const fn (ctx: Context, a: Allocator) Error![]u8,
+    comptime TrySerialize: *const fn (bytes: []u8, a: Allocator) Error!Context,
 ) type {
     return struct {
         ctx: Context,
         const Self = @This();
-        pub const Error = ToBytesError;
 
-        pub inline fn to_bytes(self: Self, allocator: std.mem.Allocator) Error![]u8 {
+        pub inline fn to_bytes(self: Self, allocator: Allocator) Error![]u8 {
             return ToBytesFn(self.ctx, allocator);
+        }
+
+        pub inline fn try_serialize(bytes: []u8, allocator: Allocator) Error!Self {
+            const ctx = try TrySerialize(bytes, allocator);
+            return Self.from(ctx);
         }
 
         pub fn from(ctx: Context) Self {
@@ -141,40 +147,38 @@ pub fn ApplicationData(
 
 /// Context needed by any extension
 /// used to adjust fields as needed based on extension data
-const ExtensionDataFrameCtx = struct {
+const ExtensionDataCreateCtx = struct {
     rsv1: *u1,
     rsv2: *u1,
     rsv3: *u1,
     opcode: *OpCode,
     app_data: *[]u8,
-    allocator: *std.mem.Allocator,
+    allocator: *Allocator,
     const Self = @This();
-
-    /// Must pass in a type returned by `NewFrame`
-    fn from_frame(frame: anytype) Self {
-        return Self{
-            .rsv1 = &frame.rsv1,
-            .rsv2 = &frame.rsv2,
-            .rsv3 = &frame.rsv3,
-            .opcode = &frame.opcode,
-            .app_data = &frame.application_data,
-            .allocator = &frame.allocator,
-        };
-    }
+};
+const ExtensionDataReadCtx = struct {
+    create_ctx: ExtensionDataCreateCtx,
+    payload_len: *u7,
+    extended_payload_len: *?ExtendedPayloadLength,
 };
 /// More likely to change once I'm more familiar with the needs of extensions
 pub fn ExtensionData(
     comptime Context: type,
-    comptime CreateError: type,
-    comptime CreateFromContexts: *const fn (ctx: Context, d: ExtensionDataFrameCtx) CreateError!?[]u8,
+    comptime Error: type,
+    comptime CreateFromContexts: *const fn (ctx: Context, d: ExtensionDataCreateCtx) Error!?[]u8,
+    comptime TryRead: *const fn (bytes: []u8, read_ctx: ExtensionDataReadCtx) Error!Context,
 ) type {
     return struct {
         ctx: Context,
         const Self = @This();
-        pub const Error = CreateError;
 
-        pub inline fn create(self: Self, d: ExtensionDataFrameCtx) Error!?[]u8 {
+        pub inline fn create(self: Self, d: ExtensionDataCreateCtx) Error!?[]u8 {
             return CreateFromContexts(self.ctx, d);
+        }
+
+        pub inline fn try_read(bytes: []u8, read_ctx: ExtensionDataReadCtx) Error!Self {
+            const ctx = try TryRead(bytes, read_ctx);
+            return Self.from(ctx);
         }
 
         pub fn from(ctx: Context) Self {
@@ -190,7 +194,7 @@ pub fn NewFrame(
     ExtData: anytype,
 ) type {
     return struct {
-        allocator: std.mem.Allocator,
+        allocator: Allocator,
         fin: u1,
         ///   MUST be 0 unless an extension is negotiated that defines meanings
         ///   for non-zero values.  If a nonzero value is received and none of
@@ -235,7 +239,7 @@ pub fn NewFrame(
             masking_key: ?MaskingKey = null,
             app_data: AppData,
             ext_data: ?ExtData = null,
-            allocator: std.mem.Allocator,
+            allocator: Allocator,
         };
 
         pub fn init(opts: InitOptions)
@@ -244,7 +248,7 @@ pub fn NewFrame(
             var app_data_bytes = try opts.app_data.to_bytes(opts.allocator);
             var ext_data_bytes: ?[]u8 = null;
 
-            var opcode: OpCode, var allocator: std.mem.Allocator, var rsv1: u1, var rsv2: u1, var rsv3: u1 = .{
+            var opcode: OpCode, var allocator: Allocator, var rsv1: u1, var rsv2: u1, var rsv3: u1 = .{
                 opts.opcode,
                 opts.allocator,
                 opts.rsv1,
@@ -253,7 +257,7 @@ pub fn NewFrame(
             };
 
             if (opts.ext_data) |d| {
-                const ext_data_frame_ctx = ExtensionDataFrameCtx{
+                const ext_data_frame_ctx = ExtensionDataCreateCtx{
                     .rsv1 = &rsv1,
                     .rsv2 = &rsv2,
                     .rsv3 = &rsv3,
@@ -397,7 +401,7 @@ pub const Frame = struct {
     }
 
     /// Serialize `Frame` to `[]u8`
-    pub fn as_bytes(frame: Frame, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+    pub fn as_bytes(frame: Frame, allocator: Allocator) Allocator.Error![]u8 {
         std.log.warn("writing frame to bytes: {any}\n", .{frame});
         const size = frame.get_size();
         std.log.warn("frame has {} bytes in arr\n", .{size});
@@ -462,7 +466,7 @@ pub const Frame = struct {
     }
 
     // this reader could be constrained more but fuq it
-    pub fn read(reader: anytype, allocator: std.mem.Allocator) !Frame {
+    pub fn read(reader: anytype, allocator: Allocator) !Frame {
         const first_byte: u8 = (try reader.readBytesNoEof(1))[0];
         const second_byte: u8 = (try reader.readBytesNoEof(1))[0];
         std.log.debug("first byte: {b}\nsecond: {b}\n", .{ first_byte, second_byte });
@@ -798,31 +802,84 @@ test "Frame.as_bytes() works correctly" {
     }
 }
 
-const ByteData = ApplicationData([64]u8, std.mem.Allocator.Error, struct {
-    fn run(in: [64]u8, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
-        const bytes = try allocator.alloc(u8, in.len);
+const SizedByteDataError =
+    error{ Allocator, SizeMismatch };
+const SizedByteData = ApplicationData([64]u8, SizedByteDataError, struct {
+    fn to_bytes(in: [64]u8, allocator: Allocator) SizedByteDataError![]u8 {
+        const bytes = allocator.alloc(u8, in.len) catch return error.Allocator;
         std.mem.copyForwards(u8, bytes, &in);
         return bytes;
     }
-}.run);
-const NullExt = ExtensionData([0]u1, std.mem.Allocator.Error, struct {
-    fn run(in: [0]u1, ext_ctx: ExtensionDataFrameCtx) std.mem.Allocator.Error!?[]u8 {
+}.to_bytes, struct {
+    fn try_ser(bytes: []u8, a: Allocator) SizedByteDataError![64]u8 {
+        defer a.free(bytes);
+        if (bytes.len != 64) {
+            return error.SizeMismatch;
+        }
+        var buf: [64]u8 = undefined;
+        @memset(&buf, 0);
+        @memcpy(&buf, bytes[0..]);
+        // for (bytes, 0..) |b, i| {
+        //     buf[i] = b;
+        // }
+        return buf;
+    }
+}.try_ser);
+const NullExt = ExtensionData([0]u1, Allocator.Error, struct {
+    fn create(in: [0]u1, ext_ctx: ExtensionDataCreateCtx) Allocator.Error!?[]u8 {
         _ = ext_ctx;
         _ = in;
         return null;
     }
-}.run);
-
-const JsonData = ApplicationData(std.json.Value, std.mem.Allocator, struct {
-    fn run(in: std.json.Value, a: std.mem.Allocator) std.mem.Allocator![]u8 {
-        return std.json.stringifyAlloc(a, in, .{});
+}.create, struct {
+    fn try_read(bytes: []u8, ctx: ExtensionDataReadCtx) Allocator.Error![0]u1 {
+        _ = ctx;
+        _ = bytes;
+        return .{};
     }
-}.run);
+}.try_read);
+
+const PlaceDataError =
+    error{ Allocator, Json };
+const PlaceData = ApplicationData(
+    Place,
+    PlaceDataError,
+    struct {
+        fn to_bytes(in: Place, a: Allocator) PlaceDataError![]u8 {
+            return std.json.stringifyAlloc(a, in, .{}) catch |e| {
+                std.log.err("failed to stringify place: {}\n", .{e});
+                return error.Allocator;
+            };
+        }
+    }.to_bytes,
+
+    struct {
+        fn try_ser(bytes: []u8, a: Allocator) PlaceDataError!Place {
+            const parsed = std.json.parseFromSlice(
+                Place,
+                a,
+                bytes,
+                .{},
+            ) catch |e| {
+                std.log.err("failed to parse place: {}\n", .{e});
+                return error.Json;
+            };
+            defer parsed.deinit();
+            return parsed.value;
+        }
+    }.try_ser,
+);
+const Place = struct { lat: f32, long: f32 };
 
 test "newframe" {
     const allocator = std.testing.allocator;
-    const data = ByteData.from(std.mem.zeroes([64]u8));
-    const frame = try NewFrame(ByteData, NullExt).init(.{ .opcode = OpCode.text, .app_data = data, .allocator = allocator });
-    defer frame.deinit();
-    std.log.warn("made frame: {any}\n", .{frame});
+    const data = SizedByteData.from(std.mem.zeroes([64]u8));
+    const byte_frame = try NewFrame(SizedByteData, NullExt).init(.{ .opcode = OpCode.text, .app_data = data, .allocator = allocator });
+    defer byte_frame.deinit();
+    std.log.warn("made byte frame: {any}\n", .{byte_frame});
+
+    const place = PlaceData.from(Place{ .lat = 0.5, .long = 4.56 });
+    const json_frame = try NewFrame(PlaceData, NullExt).init(.{ .opcode = OpCode.text, .app_data = place, .allocator = allocator });
+    defer json_frame.deinit();
+    std.log.warn("made json frame: {any}\n", .{json_frame});
 }
