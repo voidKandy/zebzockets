@@ -74,10 +74,12 @@ pub fn build(b: *std.Build) void {
     build_server_step.dependOn(&install_server.step);
 
     const lib_unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/root.zig"),
+        .root_source_file = b.path("tests/all.zig"),
         .target = target,
         .optimize = optimize,
     });
+
+    lib_unit_tests.root_module.addImport("zebzockets", zebzockets);
     // lib_unit_tests.root_module.addImport("zebzockets", zebzockets);
 
     const run_lib_unit_tests = b.addRunArtifact(lib_unit_tests);
