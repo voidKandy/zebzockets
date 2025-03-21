@@ -12,15 +12,15 @@ const std = @import("std");
 ///   *  %xA denotes a pong
 ///   *  %xB-F are reserved for further control frames
 pub const OpCode = enum(u4) {
-    // non-control frames
     continuation = 0x0,
     text = 0x1,
     binary = 0x2,
+    /// generally reserved for extensions
     undefined_non_control,
-    // control frames
     close = 0x8,
     ping = 0x9,
     pong = 0xA,
+    /// generally reserved for extensions
     undefined_control,
 
     fn from(byte: u4) OpCode {
@@ -117,6 +117,184 @@ fn mask_data(key: MaskingKey, data: *[]u8) void {
     for (0..data.len) |i| {
         data.*[i] ^= key[i % 4];
     }
+}
+
+pub fn ApplicationData(
+    comptime Context: type,
+    comptime ToBytesError: type,
+    comptime ToBytesFn: *const fn (ctx: Context, a: std.mem.Allocator) ToBytesError![]u8,
+) type {
+    return struct {
+        ctx: Context,
+        const Self = @This();
+        pub const Error = ToBytesError;
+
+        pub inline fn to_bytes(self: Self, allocator: std.mem.Allocator) Error![]u8 {
+            return ToBytesFn(self.ctx, allocator);
+        }
+
+        pub fn from(ctx: Context) Self {
+            return Self{ .ctx = ctx };
+        }
+    };
+}
+
+/// Context needed by any extension
+/// used to adjust fields as needed based on extension data
+const ExtensionDataFrameCtx = struct {
+    rsv1: *u1,
+    rsv2: *u1,
+    rsv3: *u1,
+    opcode: *OpCode,
+    app_data: *[]u8,
+    allocator: *std.mem.Allocator,
+    const Self = @This();
+
+    /// Must pass in a type returned by `NewFrame`
+    fn from_frame(frame: anytype) Self {
+        return Self{
+            .rsv1 = &frame.rsv1,
+            .rsv2 = &frame.rsv2,
+            .rsv3 = &frame.rsv3,
+            .opcode = &frame.opcode,
+            .app_data = &frame.application_data,
+            .allocator = &frame.allocator,
+        };
+    }
+};
+/// More likely to change once I'm more familiar with the needs of extensions
+pub fn ExtensionData(
+    comptime Context: type,
+    comptime CreateError: type,
+    comptime CreateFromContexts: *const fn (ctx: Context, d: ExtensionDataFrameCtx) CreateError!?[]u8,
+) type {
+    return struct {
+        ctx: Context,
+        const Self = @This();
+        pub const Error = CreateError;
+
+        pub inline fn create(self: Self, d: ExtensionDataFrameCtx) Error!?[]u8 {
+            return CreateFromContexts(self.ctx, d);
+        }
+
+        pub fn from(ctx: Context) Self {
+            return Self{ .ctx = ctx };
+        }
+    };
+}
+
+pub fn NewFrame(
+    /// **MUST** be a type returned by the `ApplicationData` function
+    AppData: anytype,
+    /// **MUST** be a type returned by the `ExtensionData` function
+    ExtData: anytype,
+) type {
+    return struct {
+        allocator: std.mem.Allocator,
+        fin: u1,
+        ///   MUST be 0 unless an extension is negotiated that defines meanings
+        ///   for non-zero values.  If a nonzero value is received and none of
+        ///   the negotiated extensions defines the meaning of such a nonzero
+        ///   value, the receiving endpoint MUST _Fail the WebSocket Connection_.
+        rsv1: u1 = 0,
+        rsv2: u1 = 0,
+        rsv3: u1 = 0,
+        /// Defines the interpretation of the "Payload data".
+        opcode: OpCode,
+        ///   Defines whether the "Payload data" is masked.  If set to 1, a
+        ///   masking key is present in masking-key, and this is used to unmask
+        ///   the "Payload data" as per Section 5.3.  All frames sent from
+        ///   client to server have this bit set to 1.
+        mask: u1,
+        ///   The length of `payload_data` in bytes if 0-125, 7 bits is enough
+        payload_length: u7,
+        /// For handling `payload_len` > 125
+        extended_payload_length: ?ExtendedPayloadLength,
+        ///   All frames sent from the client to the server are masked by a
+        ///   32-bit value that is contained within the frame.  This field is
+        ///   present if the mask bit is set to 1 and is absent if the mask bit is set to 0.
+        masking_key: ?MaskingKey,
+        application_data: []u8,
+        extension_data: ?[]u8,
+
+        const Self = @This();
+
+        pub fn deinit(self: Self) void {
+            self.allocator.free(self.application_data);
+            if (self.extension_data) |d| {
+                self.allocator.free(d);
+            }
+        }
+
+        const InitOptions = struct {
+            fin: bool = false,
+            rsv1: u1 = 0,
+            rsv2: u1 = 0,
+            rsv3: u1 = 0,
+            opcode: OpCode,
+            masking_key: ?MaskingKey = null,
+            app_data: AppData,
+            ext_data: ?ExtData = null,
+            allocator: std.mem.Allocator,
+        };
+
+        pub fn init(opts: InitOptions)
+        // AppData.Error!Self
+        !Self {
+            var app_data_bytes = try opts.app_data.to_bytes(opts.allocator);
+            var ext_data_bytes: ?[]u8 = null;
+
+            var opcode: OpCode, var allocator: std.mem.Allocator, var rsv1: u1, var rsv2: u1, var rsv3: u1 = .{
+                opts.opcode,
+                opts.allocator,
+                opts.rsv1,
+                opts.rsv2,
+                opts.rsv3,
+            };
+
+            if (opts.ext_data) |d| {
+                const ext_data_frame_ctx = ExtensionDataFrameCtx{
+                    .rsv1 = &rsv1,
+                    .rsv2 = &rsv2,
+                    .rsv3 = &rsv3,
+                    .opcode = &opcode,
+                    .app_data = &app_data_bytes,
+                    .allocator = &allocator,
+                };
+                ext_data_bytes = try d.create(ext_data_frame_ctx);
+            }
+
+            const len: usize = app_data_bytes.len + if (ext_data_bytes) |b| b.len else 0;
+            var extended_payload_length: ?ExtendedPayloadLength = null;
+            const payload_length: u7 = blk: {
+                switch (len) {
+                    0...125 => break :blk @as(u7, @intCast(len)),
+                    126...65535 => {
+                        extended_payload_length = ExtendedPayloadLength{ .sixteen = @as(u16, @intCast(len)) };
+                        break :blk @as(u7, 126);
+                    },
+                    else => {
+                        extended_payload_length = ExtendedPayloadLength{ .sixtyfour = @as(u64, @intCast(len)) };
+                        break :blk @as(u7, 127);
+                    },
+                }
+            };
+            return Self{
+                .fin = if (opts.fin) 1 else 0,
+                .rsv1 = rsv1,
+                .rsv2 = rsv2,
+                .rsv3 = rsv3,
+                .mask = if (opts.masking_key) |_| 1 else 0,
+                .opcode = opcode,
+                .payload_length = payload_length,
+                .extended_payload_length = extended_payload_length,
+                .masking_key = opts.masking_key,
+                .application_data = app_data_bytes,
+                .extension_data = ext_data_bytes,
+                .allocator = allocator,
+            };
+        }
+    };
 }
 
 ///   https://www.rfc-editor.org/rfc/rfc6455.html#section-5.2
@@ -618,4 +796,33 @@ test "Frame.as_bytes() works correctly" {
         try std.testing.expectEqualSlices(u8, expected, bytes);
         std.log.warn("Case {d} passed", .{i});
     }
+}
+
+const ByteData = ApplicationData([64]u8, std.mem.Allocator.Error, struct {
+    fn run(in: [64]u8, allocator: std.mem.Allocator) std.mem.Allocator.Error![]u8 {
+        const bytes = try allocator.alloc(u8, in.len);
+        std.mem.copyForwards(u8, bytes, &in);
+        return bytes;
+    }
+}.run);
+const NullExt = ExtensionData([0]u1, std.mem.Allocator.Error, struct {
+    fn run(in: [0]u1, ext_ctx: ExtensionDataFrameCtx) std.mem.Allocator.Error!?[]u8 {
+        _ = ext_ctx;
+        _ = in;
+        return null;
+    }
+}.run);
+
+const JsonData = ApplicationData(std.json.Value, std.mem.Allocator, struct {
+    fn run(in: std.json.Value, a: std.mem.Allocator) std.mem.Allocator![]u8 {
+        return std.json.stringifyAlloc(a, in, .{});
+    }
+}.run);
+
+test "newframe" {
+    const allocator = std.testing.allocator;
+    const data = ByteData.from(std.mem.zeroes([64]u8));
+    const frame = try NewFrame(ByteData, NullExt).init(.{ .opcode = OpCode.text, .app_data = data, .allocator = allocator });
+    defer frame.deinit();
+    std.log.warn("made frame: {any}\n", .{frame});
 }
