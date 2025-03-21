@@ -2,8 +2,8 @@
 const std = @import("std");
 pub const cli = @import("cli.zig");
 pub const frame = @import("frame.zig");
-pub const server_hs = @import("server_handshake.zig");
-pub const client_hs = @import("client_handshake.zig");
+pub const server = @import("server/root.zig");
+pub const client = @import("client/root.zig");
 const testing = std.testing;
 const log = std.log;
 

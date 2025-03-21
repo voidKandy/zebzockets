@@ -4,6 +4,18 @@ const net = std.net;
 const print = std.debug.print;
 const assert = std.debug.assert;
 
+/// https://gist.github.com/kassane/a81d1ae2fa2e8c656b91afee8b949426
+const std_options = struct {
+    const log_level = .debug;
+
+    const log_scope_levels = &[_]std.log.ScopeLevel{
+        .{ .scope = .debug, .level = .debug },
+        .{ .scope = .warn, .level = .warn },
+    };
+};
+
+const log = std.log.scoped(.warn);
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -24,7 +36,7 @@ pub fn main() !void {
     };
     // shoudl be a cli arg
     const uri = try zz.WsUri.from_str("ws://127.0.0.1/chat");
-    var handshake = try zz.client_hs.Handshake.init_with_headers(uri, &headers, allocator);
+    var handshake = try zz.client.handshake.Handshake.init_with_headers(uri, &headers, allocator);
     defer handshake.deinit();
     const body =
         try handshake.body();
@@ -33,19 +45,44 @@ pub fn main() !void {
     print("Sending '{s}' to peer, total written: {d} bytes\n", .{ body.items, size });
     const len = try reader.read(&read_buffer);
     const response = read_buffer[0..len];
-    const server_handshake = try zz.server_hs.Handshake.try_from_bytes(response);
+    const server_handshake = try zz.server.handshake.Handshake.try_from_bytes(response);
 
     if (!server_handshake.is_ok()) {
-        std.log.err("server returned non 200 status", .{});
+        log.err("server returned non 200 status", .{});
         return error.ServerRespondedNotOk;
     }
 
     print("Established WS connection with server!\n", .{});
-    var thread = try std.Thread.spawn(.{}, run_prompt, .{ allocator, writer });
-    thread.join();
+
+    var pool: std.Thread.Pool = undefined;
+    try pool.init(.{ .allocator = allocator });
+    var wg = std.Thread.WaitGroup{};
+    pool.spawnWg(&wg, run_prompt, .{ pool.allocator, writer });
+    pool.spawnWg(&wg, handle_messages_from_server, .{ pool.allocator, reader });
+    pool.waitAndWork(&wg);
 }
 
-fn run_prompt(allocator: std.mem.Allocator, writer: anytype) !void {
+fn handle_messages_from_server(allocator: std.mem.Allocator, reader: anytype) void {
+    _handle_messages_from_server(allocator, reader) catch |e| {
+        log.err("Error in handle messages from server: {}\n", .{e});
+    };
+}
+fn run_prompt(allocator: std.mem.Allocator, writer: anytype) void {
+    _run_prompt(allocator, writer) catch |e| {
+        log.err("Error in run prompt: {}\n", .{e});
+    };
+}
+
+fn _handle_messages_from_server(allocator: std.mem.Allocator, reader: anytype) !void {
+    const stdout = std.io.getStdOut().writer();
+    while (true) {
+        const frame = try zz.frame.Frame(.{}).read(reader, allocator);
+        log.debug("received frame: {any}\n", .{frame});
+        try stdout.print("received from server:\nApplication Data:\n{s}\nExtension Data:\n{s}\n", .{ frame.payload_data.application_data, frame.payload_data.extension_data });
+    }
+}
+
+fn _run_prompt(allocator: std.mem.Allocator, writer: anytype) !void {
     const stdout = std.io.getStdOut().writer();
     const stdin = std.io.getStdIn().reader();
     const rand = std.crypto.random;
@@ -61,10 +98,10 @@ fn run_prompt(allocator: std.mem.Allocator, writer: anytype) !void {
         }
 
         const result = try stdin.readUntilDelimiter(&buffer, '\n');
-        const payload = zz.frame.PayloadData.new().application_data(result).mask(mask_key).finish();
-        const frame = zz.frame.Frame.build(true, zz.frame.OpCode.text, payload, mask_key);
-        std.log.warn("frame: {any}\n", .{frame});
-        const bytes = try frame.as_bytes(allocator);
+        const frame = try zz.frame.Frame(.{}).build(true, zz.frame.OpCode.text, result, null).masking_key(mask_key).finish(allocator);
+        defer frame.deinit();
+        log.warn("frame: {any}\n", .{frame});
+        const bytes = try frame.as_bytes();
         try writer.writeAll(bytes);
         try stdout.print("Sent Frame\n", .{});
     }

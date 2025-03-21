@@ -145,6 +145,29 @@ test "SizedByteData" {
             break :blk buf;
         },
     }, allocator);
+
+    try TestCase(SizedByteData, NullExt).run_test(.{
+        .fin = true,
+        .opcode = OpCode.text,
+        .app_data = SizedByteData.from(blk: {
+            var arr: [SizedByteDataSize]u8 = undefined;
+            @memset(&arr, 0x55);
+            arr[0] = 0x39;
+            arr[SizedByteDataSize - 1] = 0x86;
+            break :blk arr;
+        }),
+        .ext_data = NullExt.from(.{}),
+        .masking_key = null,
+        .expected_bytes = &blk: {
+            var buf: [SizedByteDataSize + 2]u8 = undefined;
+            buf[0] = 0x81;
+            buf[1] = @as(u8, SizedByteDataSize);
+            @memset(buf[2..], 0x55);
+            buf[2] = 0x39;
+            buf[SizedByteDataSize + 1] = 0x86;
+            break :blk buf;
+        },
+    }, allocator);
 }
 
 test "masking works" {
