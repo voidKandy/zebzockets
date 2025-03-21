@@ -69,7 +69,7 @@ fn TestCase(
         const MyFrame =
             Frame(AppData, ExtData);
 
-        fn test_case(case: Self, allocator: std.mem.Allocator) !void {
+        fn run_test(case: Self, allocator: std.mem.Allocator) !void {
             std.log.warn("TESTING {s}\n", .{@typeName(AppData)});
             const frame = try MyFrame.init(.{
                 .fin = case.fin,
@@ -124,7 +124,7 @@ test "SizedByteData" {
 
     const allocator = std.testing.allocator;
 
-    try TestCase(SizedByteData, NullExt).test_case(.{
+    try TestCase(SizedByteData, NullExt).run_test(.{
         .fin = false,
         .opcode = OpCode.text,
         .app_data = SizedByteData.from(blk: {
