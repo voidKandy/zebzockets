@@ -1,6 +1,54 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+pub const NullExtStruct = struct {};
+/// A good default for when no extension data is expected
+pub const NullExt = ExtensionData(NullExtStruct, Allocator.Error, struct {
+    fn create(in: NullExtStruct, ctx: ExtDataCtx(NullExtStruct).Create) Allocator.Error!?[]u8 {
+        _ = ctx;
+        _ = in;
+        return null;
+    }
+}.create, struct {
+    fn read(bytes: []u8, ctx: ExtDataCtx(NullExtStruct).Read) Allocator.Error!ExtDataCtx(NullExtStruct).ReadResult {
+        _ = ctx;
+        _ = bytes;
+        return .{ .inner = .{}, .amt = 0 };
+    }
+}.read, null);
+
+/// Good default for when the frame is sending Json data
+pub fn JsonAppData(
+    Data: type,
+    parse_options: std.json.ParseOptions,
+    stringify_options: std.json.StringifyOptions,
+) type {
+    const Error = error{ Allocator, Json };
+    const ParsedData = std.json.Parsed(Data);
+
+    return ApplicationData(ParsedData, Error, struct {
+        fn ser(data: ParsedData, a: Allocator) Error![]u8 {
+            const arr = std.json.stringifyAlloc(a, data.value, stringify_options) catch {
+                return error.Allocator;
+            };
+            return arr;
+        }
+    }.ser, struct {
+        fn deser(bytes: []u8, a: Allocator) Error!ParsedData {
+            const parsed = std.json.parseFromSlice(Data, a, bytes, parse_options) catch |e| {
+                std.log.err("failed to parse from slice: {?}\n", .{e});
+                return error.Json;
+            };
+            return parsed;
+        }
+    }.deser, struct {
+        fn deinit(d: ParsedData, a: Allocator) void {
+            _ = a;
+            d.deinit();
+        }
+    }.deinit);
+}
+
 ///   Defines the interpretation of the "Payload data".  If an unknown
 ///   opcode is received, the receiving endpoint MUST _Fail the
 ///   WebSocket Connection_.  The following values are defined.
@@ -64,27 +112,34 @@ pub fn mask_data(key: MaskingKey, data: *[]u8) void {
 }
 
 pub fn ApplicationData(
-    comptime Context: type,
+    comptime Data: type,
     comptime Error: type,
-    comptime ToBytesFn: *const fn (ctx: Context, a: Allocator) Error![]u8,
-    comptime TrySerialize: *const fn (bytes: []u8, a: Allocator) Error!Context,
+    comptime SerializeFn: *const fn (ctx: Data, a: Allocator) Error![]u8,
+    comptime DeserializeFn: *const fn (bytes: []u8, a: Allocator) Error!Data,
+    comptime CleanupFn: ?*const fn (d: Data, a: Allocator) void,
 ) type {
     return struct {
-        ctx: Context,
+        inner: Data,
         const Self = @This();
 
-        pub inline fn to_bytes(self: Self, allocator: Allocator) Error![]u8 {
-            return ToBytesFn(self.ctx, allocator);
+        pub inline fn deinit(self: Self, a: Allocator) void {
+            if (CleanupFn) |f| {
+                f(self.inner, a);
+            }
+        }
+
+        pub inline fn serialize(self: Self, allocator: Allocator) Error![]u8 {
+            return SerializeFn(self.inner, allocator);
         }
 
         /// function for reading `Context` from the tail of the `payload_data` **AFTER** extension data has been removed
-        pub inline fn try_serialize(bytes: []u8, allocator: Allocator) Error!Self {
-            const ctx = try TrySerialize(bytes, allocator);
+        pub inline fn deserialize(bytes: []u8, allocator: Allocator) Error!Self {
+            const ctx = try DeserializeFn(bytes, allocator);
             return Self.from(ctx);
         }
 
-        pub fn from(ctx: Context) Self {
-            return Self{ .ctx = ctx };
+        pub fn from(ctx: Data) Self {
+            return Self{ .inner = ctx };
         }
     };
 }
@@ -128,7 +183,8 @@ pub fn ExtensionData(
     comptime Data: type,
     comptime Error: type,
     comptime CreateFn: ExtDataCtx(Data).CreateFn(Error),
-    comptime TryReadFn: ExtDataCtx(Data).ReadFn(Error),
+    comptime ReadFn: ExtDataCtx(Data).ReadFn(Error),
+    comptime CleanupFn: ?*const fn (d: Data, a: Allocator) void,
 ) type {
     return struct {
         inner: Data,
@@ -136,12 +192,18 @@ pub fn ExtensionData(
         const Context =
             ExtDataCtx(Data);
 
+        pub inline fn deinit(self: Self, a: Allocator) void {
+            if (CleanupFn) |f| {
+                f(self.inner, a);
+            }
+        }
+
         pub inline fn create(self: Self, create_ctx: Context.Create) Error!?[]u8 {
             return CreateFn(self.inner, create_ctx);
         }
 
-        pub inline fn try_read(bytes: []u8, read_ctx: Context.Read) Error!Context.ReadResult {
-            return TryReadFn(bytes, read_ctx);
+        pub inline fn read(bytes: []u8, read_ctx: Context.Read) Error!Context.ReadResult {
+            return ReadFn(bytes, read_ctx);
         }
 
         pub fn from(inner: Data) Self {
@@ -206,19 +268,37 @@ pub fn Frame(
         }
 
         const PayloadData = struct {
+            _source: []u8,
             app_data: AppData,
             ext_data: ?ExtData,
+
+            pub fn deinit(self: PayloadData, allocator: Allocator) void {
+                allocator.free(self._source);
+                self.app_data.deinit(allocator);
+                if (self.ext_data) |ext| {
+                    ext.deinit(allocator);
+                }
+            }
         };
 
         /// Copies frame's `_payload_data` and returns serialized Extension and Application data
         pub fn payload_data(self: Self) !PayloadData {
             var copy = try self.allocator.dupe(u8, self._payload_data);
             const read_ctx = self.as_read_context();
-            const ext_read_result = try ExtData.try_read(copy, read_ctx);
-            const app_data = try AppData.try_serialize(copy[ext_read_result.amt..], self.allocator);
+            const ext_read_result = try ExtData.read(copy, read_ctx);
+
+            const read_amt = ext_read_result.amt;
+            var ext_data: ?ExtData =
+                null;
+            if (read_amt > 0) {
+                ext_data = ExtData.from(ext_read_result.inner);
+            }
+
+            const app_data = try AppData.deserialize(copy[read_amt..], self.allocator);
             return PayloadData{
+                ._source = copy,
                 .app_data = app_data,
-                .ext_data = ExtData.from(ext_read_result.inner),
+                .ext_data = ext_data,
             };
         }
 
@@ -247,8 +327,14 @@ pub fn Frame(
         pub fn init(opts: InitOptions)
         // AppData.Error!Self
         !Self {
-            var app_data_bytes: []u8 = try opts.app_data.to_bytes(opts.allocator);
+            var app_data_bytes: []u8 = try opts.app_data.serialize(opts.allocator);
             var ext_data_bytes: ?[]u8 = null;
+            defer {
+                opts.allocator.free(app_data_bytes);
+                if (ext_data_bytes) |b| {
+                    opts.allocator.free(b);
+                }
+            }
 
             var opcode: OpCode, var allocator: Allocator, var rsv1: u1, var rsv2: u1, var rsv3: u1 = .{
                 opts.opcode,
@@ -277,10 +363,8 @@ pub fn Frame(
             if (ext_data_bytes) |bytes| {
                 payload =
                     try std.mem.concat(allocator, u8, &[2][]u8{ bytes, app_data_bytes });
-                allocator.free(app_data_bytes);
-                allocator.free(bytes);
             } else {
-                payload = app_data_bytes;
+                payload = try allocator.dupe(u8, app_data_bytes);
             }
 
             if (opts.masking_key) |k| {
@@ -318,7 +402,7 @@ pub fn Frame(
         }
 
         /// Serialize `Frame` to `[]u8`
-        pub fn as_bytes(self: Self, allocator: Allocator) Allocator.Error![]u8 {
+        pub fn serialize(self: Self, allocator: Allocator) Allocator.Error![]u8 {
             std.log.warn("writing frame to bytes: {any}\n", .{self});
             const size = self.get_size();
             std.log.warn("frame has {} bytes in arr\n", .{size});

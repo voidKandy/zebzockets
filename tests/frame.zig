@@ -7,54 +7,10 @@ const MaskingKey = zz.frame.MaskingKey;
 const OpCode = zz.frame.OpCode;
 const ExtensionData = zz.frame.ExtensionData;
 const ExtDataCtx = zz.frame.ExtDataCtx;
+const NullExt = zz.frame.NullExt;
 
-const NullExt = ExtensionData([0]u1, Allocator.Error, struct {
-    fn create(in: [0]u1, ctx: ExtDataCtx([0]u1).Create) Allocator.Error!?[]u8 {
-        _ = ctx;
-        _ = in;
-        return null;
-    }
-}.create, struct {
-    fn try_read(bytes: []u8, ctx: ExtDataCtx([0]u1).Read) Allocator.Error!ExtDataCtx([0]u1).ReadResult {
-        _ = ctx;
-        _ = bytes;
-        return .{ .amt = 0, .inner = .{} };
-    }
-}.try_read);
-
-const PlaceDataError =
-    error{ Allocator, Json };
-const PlaceData = ApplicationData(
-    Place,
-    PlaceDataError,
-    struct {
-        fn to_bytes(in: Place, a: Allocator) PlaceDataError![]u8 {
-            return std.json.stringifyAlloc(a, in, .{}) catch |e| {
-                std.log.err("failed to stringify place: {?}\n", .{e});
-                return error.Allocator;
-            };
-        }
-    }.to_bytes,
-
-    struct {
-        fn try_ser(bytes: []u8, a: Allocator) PlaceDataError!Place {
-            const parsed = std.json.parseFromSlice(
-                Place,
-                a,
-                bytes,
-                .{},
-            ) catch |e| {
-                std.log.err("failed to parse place: {?}\n", .{e});
-                return error.Json;
-            };
-            defer parsed.deinit();
-            return parsed.value;
-        }
-    }.try_ser,
-);
-const Place = struct { lat: f32, long: f32 };
-
-fn TestCase(
+/// For running tests with the `SizedByteData` type
+fn BytesTestCase(
     AppData: anytype,
     ExtData: anytype,
 ) type {
@@ -81,13 +37,15 @@ fn TestCase(
             defer frame.deinit();
 
             const payload = try frame.payload_data();
+            defer payload.deinit(frame.allocator);
+
             if (!std.meta.eql(payload.app_data, case.app_data)) {
                 std.debug.panic("did not get expected payload app data value\nExpected: {?}\nGot: {?}\n", .{ payload.app_data, case.app_data });
             }
             if (!std.meta.eql(payload.ext_data, case.ext_data)) {
                 std.debug.panic("did not get expected payload ext data value\nExpected: {?}\nGot: {?}\n", .{ payload.ext_data, case.ext_data });
             }
-            const bytes = try frame.as_bytes(allocator);
+            const bytes = try frame.serialize(allocator);
             defer allocator.free(bytes);
 
             try std.testing.expectEqualSlices(u8, case.expected_bytes, bytes);
@@ -96,19 +54,105 @@ fn TestCase(
     };
 }
 
+/// For running tests with the `JsonAppData` type
+fn JsonTestCase(
+    payload: []const u8,
+    /// Type to be wrapped by `JsonAppData`
+    AppDataType: type,
+    ExtData: anytype,
+) type {
+    return struct {
+        const AppData = zz.frame.JsonAppData(AppDataType, .{}, .{});
+        const Self = @This();
+        const MyFrame =
+            Frame(AppData, ExtData);
+        fin: bool,
+        app_data: AppData,
+        ext_data: ?ExtData,
+        masking_key: ?MaskingKey,
+        opcode: OpCode,
+        expected_bytes: []u8,
+        allocator: Allocator,
+
+        fn deinit(self: Self) void {
+            self.allocator.free(self.expected_bytes);
+            self.app_data.inner.deinit();
+        }
+        /// only pass the non-application data expected bytes
+        /// Since the payload is known at comptime, the rest of expected bytes are created here
+        fn init(allocator: Allocator, is_fin: bool, op: OpCode, key: ?MaskingKey, ext: ?ExtData, expected: []const u8) !Self {
+            const app_data = try std.json.parseFromSlice(
+                AppDataType,
+                allocator,
+                payload,
+                .{},
+            );
+
+            var expected_bytes = try allocator.alloc(u8, expected.len + payload.len);
+
+            for (expected, 0..) |byte, i| {
+                expected_bytes[i] = byte;
+            }
+            for (payload, 0..) |byte, i| {
+                expected_bytes[i + expected.len] = byte;
+            }
+
+            return Self{
+                .fin = is_fin,
+                .app_data = AppData.from(app_data),
+                .ext_data = ext,
+                .masking_key = key,
+                .opcode = op,
+                .expected_bytes = expected_bytes,
+                .allocator = allocator,
+            };
+        }
+
+        fn run_test(case: Self) !void {
+            std.log.warn("TESTING {s}\n", .{@typeName(AppData)});
+            const frame = try MyFrame.init(.{
+                .fin = case.fin,
+                .opcode = case.opcode,
+                .app_data = case.app_data,
+                .ext_data = case.ext_data,
+                .allocator = case.allocator,
+            });
+            defer frame.deinit();
+
+            const payload_data = try frame.payload_data();
+            defer payload_data.deinit(frame.allocator);
+
+            if (!std.meta.eql(payload_data.app_data.inner.value, case.app_data.inner.value)) {
+                std.debug.panic("did not get expected payload app data value\nExpected: {?}\nGot: {?}\n", .{ payload_data.app_data, case.app_data });
+            }
+            if (payload_data.ext_data) |ext| {
+                try std.testing.expect(case.ext_data != null);
+                if (!std.meta.eql(ext.inner, case.ext_data.?.inner)) {
+                    std.debug.panic("did not get expected payload ext data value\nExpected: {?}\nGot: {?}\n", .{ payload_data.ext_data, case.ext_data });
+                }
+            }
+
+            const bytes = try frame.serialize(case.allocator);
+            defer case.allocator.free(bytes);
+
+            try std.testing.expectEqualSlices(u8, case.expected_bytes, bytes);
+            std.log.warn("Case PASSED\n", .{});
+        }
+    };
+}
 test "SizedByteData" {
     const SizedByteDataError =
         error{ Allocator, SizeMismatch };
     const SizedByteDataSize = 64;
     const SizedByteData = ApplicationData([SizedByteDataSize]u8, SizedByteDataError, struct {
-        fn to_bytes(in: [SizedByteDataSize]u8, allocator: Allocator) SizedByteDataError![]u8 {
+        fn ser(in: [SizedByteDataSize]u8, allocator: Allocator) SizedByteDataError![]u8 {
             const bytes = allocator.alloc(u8, in.len) catch return error.Allocator;
             std.mem.copyForwards(u8, bytes, &in);
             return bytes;
         }
-    }.to_bytes, struct {
-        fn try_ser(bytes: []u8, a: Allocator) SizedByteDataError![SizedByteDataSize]u8 {
-            defer a.free(bytes);
+    }.ser, struct {
+        fn deser(bytes: []u8, a: Allocator) SizedByteDataError![SizedByteDataSize]u8 {
+            _ = a;
             if (bytes.len != SizedByteDataSize) {
                 return error.SizeMismatch;
             }
@@ -120,11 +164,11 @@ test "SizedByteData" {
             // }
             return buf;
         }
-    }.try_ser);
+    }.deser, null);
 
     const allocator = std.testing.allocator;
 
-    try TestCase(SizedByteData, NullExt).run_test(.{
+    try BytesTestCase(SizedByteData, NullExt).run_test(.{
         .fin = false,
         .opcode = OpCode.text,
         .app_data = SizedByteData.from(blk: {
@@ -133,7 +177,7 @@ test "SizedByteData" {
             arr[SizedByteDataSize - 1] = 0x86;
             break :blk arr;
         }),
-        .ext_data = NullExt.from(.{}),
+        .ext_data = null,
         .masking_key = null,
         .expected_bytes = &blk: {
             var buf: [SizedByteDataSize + 2]u8 = undefined;
@@ -146,7 +190,7 @@ test "SizedByteData" {
         },
     }, allocator);
 
-    try TestCase(SizedByteData, NullExt).run_test(.{
+    try BytesTestCase(SizedByteData, NullExt).run_test(.{
         .fin = true,
         .opcode = OpCode.text,
         .app_data = SizedByteData.from(blk: {
@@ -156,7 +200,7 @@ test "SizedByteData" {
             arr[SizedByteDataSize - 1] = 0x86;
             break :blk arr;
         }),
-        .ext_data = NullExt.from(.{}),
+        .ext_data = null,
         .masking_key = null,
         .expected_bytes = &blk: {
             var buf: [SizedByteDataSize + 2]u8 = undefined;
@@ -168,6 +212,22 @@ test "SizedByteData" {
             break :blk buf;
         },
     }, allocator);
+}
+
+test "JsonAppData" {
+    const allocator = std.testing.allocator;
+    const Place = struct { long: u32, lat: u32 };
+
+    const case = try JsonTestCase("{\"long\":74,\"lat\":40}", Place, NullExt)
+        .init(allocator, false, OpCode.text, null, null, blk: {
+        var buf: [2]u8 = undefined;
+        buf[0] = 0x01;
+        buf[1] = 0x14;
+        break :blk &buf;
+    });
+    defer case.deinit();
+
+    try case.run_test();
 }
 
 test "masking works" {

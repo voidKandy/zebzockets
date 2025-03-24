@@ -1,5 +1,5 @@
 pub const handshake = @import("handshake.zig");
-const root = @import("../root.zig");
+const zz = @import("../root.zig");
 const std = @import("std");
 
 pub const Server = struct {
@@ -8,7 +8,7 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     const Self = @This();
 
-    fn init(listener: std.net.Server, allocator: std.mem.Allocator) !Self {
+    pub fn init(listener: std.net.Server, allocator: std.mem.Allocator) !Self {
         var pool: std.Thread.Pool = undefined;
         try pool.init(.{
             .allocator = allocator,
@@ -21,12 +21,12 @@ pub const Server = struct {
         };
     }
 
-    fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self) void {
         self.pool.deinit();
         self.listener.deinit();
     }
 
-    fn handle(conn: std.net.Server.Connection) void {
+    pub fn handle(conn: std.net.Server.Connection) void {
         Self._handle(conn) catch |err| switch (err) {
             // should have graceful close
             // error.Closed => {},
@@ -50,7 +50,7 @@ pub const Server = struct {
         const message = read_buffer[0..recv_total];
         std.log.info("{} says {s}\n", .{ conn.address, message });
 
-        const client_handshake = try root.client.handshake.Handshake.try_from_bytes(message);
+        const client_handshake = try zz.client.handshake.Handshake.try_from_bytes(message);
         var server_handshake = try handshake.Handshake.from_client_handshake(client_handshake, allocator);
         defer server_handshake.deinit();
 
@@ -60,10 +60,10 @@ pub const Server = struct {
         std.log.info("Sending '{s}' to peer, total written: {d} bytes\n", .{ body.items, size });
 
         while (true) {
-            const frame = try root.frame.Frame(.{}).read(reader, allocator);
+            const frame = try zz.frame.Frame(.{}).read(reader, allocator);
             defer frame.deinit();
             // currently we just ping
-            const response_frame_builder = try root.frame.Frame(.{ .ext_data_len = frame.payload_data.extension_data.len }).build(true, root.frame.OpCode.text, allocator).ext_data(frame.payload_data.extension_data).app_data(frame.payload_data.application_data);
+            const response_frame_builder = try zz.frame.Frame(.{ .ext_data_len = frame.payload_data.extension_data.len }).build(true, zz.frame.OpCode.text, allocator).ext_data(frame.payload_data.extension_data).app_data(frame.payload_data.application_data);
             const response_frame = try response_frame_builder.finish();
             defer response_frame.deinit();
 

@@ -1,9 +1,9 @@
-const root = @import("root.zig");
+const zz = @import("../root.zig");
 const std = @import("std");
 const log = std.log;
 
 pub const Handshake = struct {
-    headers: root.HeaderMap,
+    headers: zz.HeaderMap,
     arena: std.heap.ArenaAllocator,
     const Self = @This();
 
@@ -15,23 +15,23 @@ pub const Handshake = struct {
         http_version: []const u8,
         status_code: u16,
         status_message: []const u8,
-        version: root.ExpectedHeader.Version,
-        upgrade: root.ExpectedHeader.Upgrade,
-        connection: root.ExpectedHeader.Connection,
-        accept: root.ExpectedHeader.Accept,
-        protocol: ?root.ExpectedHeader.Protocol,
-        extensions: ?root.ExpectedHeader.Extensions,
+        version: zz.ExpectedHeader.Version,
+        upgrade: zz.ExpectedHeader.Upgrade,
+        connection: zz.ExpectedHeader.Connection,
+        accept: zz.ExpectedHeader.Accept,
+        protocol: ?zz.ExpectedHeader.Protocol,
+        extensions: ?zz.ExpectedHeader.Extensions,
 
         const Builder = struct {
             http_version: []const u8,
             status_code: u16,
             status_message: []const u8,
-            version: ?root.ExpectedHeader.Version = null,
-            upgrade: ?root.ExpectedHeader.Upgrade = null,
-            connection: ?root.ExpectedHeader.Connection = null,
-            accept: ?root.ExpectedHeader.Accept = null,
-            protocol: ?root.ExpectedHeader.Protocol = null,
-            extensions: ?root.ExpectedHeader.Extensions = null,
+            version: ?zz.ExpectedHeader.Version = null,
+            upgrade: ?zz.ExpectedHeader.Upgrade = null,
+            connection: ?zz.ExpectedHeader.Connection = null,
+            accept: ?zz.ExpectedHeader.Accept = null,
+            protocol: ?zz.ExpectedHeader.Protocol = null,
+            extensions: ?zz.ExpectedHeader.Extensions = null,
         };
 
         pub fn is_ok(self: Self.Deserialized) bool {
@@ -61,21 +61,21 @@ pub const Handshake = struct {
         }
     };
 
-    pub fn from_client_handshake(hs: root.client_hs.Handshake.Deserialized, allocator: std.mem.Allocator) !Self {
+    pub fn from_client_handshake(hs: zz.client.handshake.Handshake.Deserialized, allocator: std.mem.Allocator) !Self {
         var arena = std.heap.ArenaAllocator.init(allocator);
-        var headers = root.HeaderMap.init(arena.allocator());
+        var headers = zz.HeaderMap.init(arena.allocator());
 
         const hashed = try hash_key(arena.allocator(), hs.key.val);
         const base64 = try base64_encode_digest(arena.allocator(), hashed);
-        const accept = root.ExpectedHeader.from(root.ExpectedHeader.Accept, base64);
-        const version = root.ExpectedHeader.from(root.ExpectedHeader.Version, hs.version.val);
-        const upgrade = root.ExpectedHeader.from(root.ExpectedHeader.Upgrade, hs.upgrade.val);
-        const connection = root.ExpectedHeader.from(root.ExpectedHeader.Connection, hs.connection.val);
+        const accept = zz.ExpectedHeader.from(zz.ExpectedHeader.Accept, base64);
+        const version = zz.ExpectedHeader.from(zz.ExpectedHeader.Version, hs.version.val);
+        const upgrade = zz.ExpectedHeader.from(zz.ExpectedHeader.Upgrade, hs.upgrade.val);
+        const connection = zz.ExpectedHeader.from(zz.ExpectedHeader.Connection, hs.connection.val);
 
         // do something with origin to validate?
-        var origin: ?root.ExpectedHeader = null;
+        var origin: ?zz.ExpectedHeader = null;
         if (hs.origin) |o| {
-            origin = root.ExpectedHeader.from(root.ExpectedHeader.Origin, o.val);
+            origin = zz.ExpectedHeader.from(zz.ExpectedHeader.Origin, o.val);
         }
         // validate resource exists
         _ = hs.resource;
@@ -83,7 +83,7 @@ pub const Handshake = struct {
         // choose subprotocol
         var protocols = std.mem.split(u8, hs.protocol.val, ",");
         const protocol =
-            root.ExpectedHeader.from(root.ExpectedHeader.Protocol, protocols.first());
+            zz.ExpectedHeader.from(zz.ExpectedHeader.Protocol, protocols.first());
 
         if (hs.extensions) |e| {
             _ = e;
@@ -141,7 +141,7 @@ pub const Handshake = struct {
         var builder = Self.Deserialized.new(http_version, status_code, status_message);
         while (lines.next()) |line| {
             // log.warn("trying header from line: {s}\n", .{line});
-            if (root.ExpectedHeader.try_from_str(line)) |header| {
+            if (zz.ExpectedHeader.try_from_str(line)) |header| {
                 switch (header) {
                     .version => |i| builder.version = i,
                     .upgrade => |i| builder.upgrade = i,
