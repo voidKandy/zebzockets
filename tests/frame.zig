@@ -39,11 +39,13 @@ fn BytesTestCase(
             const payload = try frame.payload_data();
             defer payload.deinit(frame.allocator);
 
-            if (!std.meta.eql(payload.app_data, case.app_data)) {
-                std.debug.panic("did not get expected payload app data value\nExpected: {?}\nGot: {?}\n", .{ payload.app_data, case.app_data });
+            for (payload.app_data.inner, 0..) |b, i| {
+                if (b != case.app_data.inner[i]) {
+                    std.debug.panic("did not get expected payload app data value\nExpected: {any}\nGot:      {any}\n", .{ case.app_data.inner, payload.app_data.inner });
+                }
             }
             if (!std.meta.eql(payload.ext_data, case.ext_data)) {
-                std.debug.panic("did not get expected payload ext data value\nExpected: {?}\nGot: {?}\n", .{ payload.ext_data, case.ext_data });
+                std.debug.panic("did not get expected payload ext data value\nExpected: {?}\nGot:      {?}\n", .{ case.ext_data, payload.ext_data });
             }
             const bytes = try frame.serialize(allocator);
             defer allocator.free(bytes);
@@ -209,6 +211,28 @@ test "SizedByteData" {
             @memset(buf[2..], 0x55);
             buf[2] = 0x39;
             buf[SizedByteDataSize + 1] = 0x86;
+            break :blk buf;
+        },
+    }, allocator);
+
+    var test_transparent_arr: []u8 = try allocator.alloc(u8, 10);
+    defer allocator.free(test_transparent_arr);
+    @memset(test_transparent_arr, 0x00);
+    test_transparent_arr[0] = 0x39;
+    test_transparent_arr[10 - 1] = 0x86;
+    try BytesTestCase(zz.frame.TransparentAppData, NullExt).run_test(.{
+        .fin = true,
+        .opcode = OpCode.text,
+        .app_data = zz.frame.TransparentAppData.from(test_transparent_arr),
+        .ext_data = null,
+        .masking_key = null,
+        .expected_bytes = &blk: {
+            var buf: [10 + 2]u8 = undefined;
+            buf[0] = 0x81;
+            buf[1] = @as(u8, 10);
+            @memset(buf[2..], 0x00);
+            buf[2] = 0x39;
+            buf[10 + 1] = 0x86;
             break :blk buf;
         },
     }, allocator);

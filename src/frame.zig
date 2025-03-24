@@ -17,6 +17,21 @@ pub const NullExt = ExtensionData(NullExtStruct, Allocator.Error, struct {
     }
 }.read, null);
 
+/// Clones the internal `[]u8` in the case of both serialize and derializing
+pub const TransparentAppData = ApplicationData([]u8, Allocator.Error, struct {
+    fn serialize(ctx: []u8, a: Allocator) Allocator.Error![]u8 {
+        return try a.dupe(u8, ctx);
+    }
+}.serialize, struct {
+    fn deserialize(bytes: []u8, a: Allocator) Allocator.Error![]u8 {
+        return try a.dupe(u8, bytes);
+    }
+}.deserialize, struct {
+    fn cleanup(d: []u8, a: Allocator) void {
+        a.free(d);
+    }
+}.cleanup);
+
 /// Good default for when the frame is sending Json data
 pub fn JsonAppData(
     Data: type,
