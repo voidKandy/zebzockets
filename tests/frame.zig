@@ -47,7 +47,7 @@ fn BytesTestCase(
             if (!std.meta.eql(payload.ext_data, case.ext_data)) {
                 std.debug.panic("did not get expected payload ext data value\nExpected: {?}\nGot:      {?}\n", .{ case.ext_data, payload.ext_data });
             }
-            const bytes = try frame.serialize(allocator);
+            const bytes = try frame.serialize();
             defer allocator.free(bytes);
 
             try std.testing.expectEqualSlices(u8, case.expected_bytes, bytes);
@@ -134,7 +134,7 @@ fn JsonTestCase(
                 }
             }
 
-            const bytes = try frame.serialize(case.allocator);
+            const bytes = try frame.serialize();
             defer case.allocator.free(bytes);
 
             try std.testing.expectEqualSlices(u8, case.expected_bytes, bytes);

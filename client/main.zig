@@ -15,7 +15,8 @@ const std_options = struct {
 };
 
 const log = std.log.scoped(.warn);
-
+const Frame =
+    zz.frame.Frame(zz.frame.TransparentAppData, zz.frame.NullExt);
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -76,9 +77,11 @@ fn run_prompt(allocator: std.mem.Allocator, writer: anytype) void {
 fn _handle_messages_from_server(allocator: std.mem.Allocator, reader: anytype) !void {
     const stdout = std.io.getStdOut().writer();
     while (true) {
-        const frame = try zz.frame.Frame(.{}).read(reader, allocator);
+        const frame = try Frame.read(reader, allocator);
+        defer frame.deinit();
+
         log.debug("received frame: {any}\n", .{frame});
-        try stdout.print("received from server:\nApplication Data:\n{s}\nExtension Data:\n{s}\n", .{ frame.payload_data.application_data, frame.payload_data.extension_data });
+        try stdout.print("received from server!\n{s}\n", .{frame._payload_data});
     }
 }
 
@@ -98,10 +101,16 @@ fn _run_prompt(allocator: std.mem.Allocator, writer: anytype) !void {
         }
 
         const result = try stdin.readUntilDelimiter(&buffer, '\n');
-        const frame = try zz.frame.Frame(.{}).build(true, zz.frame.OpCode.text, result, null).masking_key(mask_key).finish(allocator);
+        const frame = try Frame.init(.{
+            .fin = true,
+            .opcode = zz.frame.OpCode.text,
+            .app_data = zz.frame.TransparentAppData.from(result),
+            .masking_key = mask_key,
+            .allocator = allocator,
+        });
         defer frame.deinit();
         log.warn("frame: {any}\n", .{frame});
-        const bytes = try frame.as_bytes();
+        const bytes = try frame.serialize();
         try writer.writeAll(bytes);
         try stdout.print("Sent Frame\n", .{});
     }

@@ -417,11 +417,11 @@ pub fn Frame(
         }
 
         /// Serialize `Frame` to `[]u8`
-        pub fn serialize(self: Self, allocator: Allocator) Allocator.Error![]u8 {
+        pub fn serialize(self: Self) Allocator.Error![]u8 {
             std.log.warn("writing frame to bytes: {any}\n", .{self});
             const size = self.get_size();
             std.log.warn("frame has {} bytes in arr\n", .{size});
-            var arr = try allocator.alloc(u8, size);
+            var arr = try self.allocator.alloc(u8, size);
             var idx: usize = 0;
 
             const first_byte =
@@ -569,6 +569,7 @@ pub fn Frame(
                 .extended_payload_length = null,
                 .masking_key = masking_key,
                 ._payload_data = payload,
+                .allocator = allocator,
             };
         }
     };

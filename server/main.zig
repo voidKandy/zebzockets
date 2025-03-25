@@ -16,6 +16,8 @@ const std_options = struct {
 
 const log = std.log.scoped(.warn);
 
+const Server =
+    zz.server.Server(zz.frame.TransparentAppData, zz.frame.NullExt);
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -26,7 +28,7 @@ pub fn main() !void {
     const addr = try net.Address.resolveIp(args.info.host, args.info.port);
     var listener = try addr.listen(.{ .reuse_address = true });
     print("Listening on {s}:{}, access this port to end the program\n", .{ args.info.host, listener.listen_address.getPort() });
-    var server = try zz.server.Server.init(listener, allocator);
+    var server = try Server.init(listener, allocator);
     defer server.deinit();
 
     var wg = std.Thread.WaitGroup{};
@@ -35,6 +37,6 @@ pub fn main() !void {
             server.pool.waitAndWork(&wg);
         }
         const conn = try server.listener.accept();
-        server.pool.spawnWg(&wg, zz.server.Server.handle, .{conn});
+        server.pool.spawnWg(&wg, Server.handle, .{conn});
     }
 }
