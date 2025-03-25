@@ -64,10 +64,8 @@ pub fn Server(AppData: type, ExtData: type) type {
             while (true) {
                 var frame = try Frame.read(reader, allocator);
                 defer frame.deinit();
-                std.log.debug("READ FRAME\n", .{});
                 const payload = try frame.payload_data();
                 defer payload.deinit(frame.allocator);
-                std.log.debug("PAYLOAD PARSED\n", .{});
                 // currently we just ping
                 const response_frame = try Frame.init(.{
                     .fin = true,
@@ -79,6 +77,7 @@ pub fn Server(AppData: type, ExtData: type) type {
                 defer response_frame.deinit();
 
                 const bytes = try response_frame.serialize();
+                defer frame.allocator.free(bytes);
                 try writer.writeAll(bytes);
             }
         }
