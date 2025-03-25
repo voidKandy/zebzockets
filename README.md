@@ -2,6 +2,16 @@
 This is a WIP [RFC compliant](https://www.rfc-editor.org/rfc/rfc6455.html) web sockets implementation in `zig`.
 Everything in the `src` directory is a library shared by the `server` and `client` binaries.
 
+## Checklist
+- [x] Open Handshake
+- [!] Close Handshake
+- [x] Framing
+- [x] client/server functionality
+- [ ] Fragmentation
+- [ ] Extension Example
+- [ ] Graceful failure
+- [ ] Better error handling
+
 
 ### Framing api
 Creating data frame is fairly simple. This library provides two functions for defining `types` that can be used for both the application and extension datas to be used in a given frame:
