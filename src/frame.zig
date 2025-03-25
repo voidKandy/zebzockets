@@ -239,6 +239,11 @@ pub fn Frame(
     /// **MUST** be a type returned by the `ExtensionData` function
     ExtData: anytype,
 ) type {
+    const Error = error{
+        Copy,
+        Read,
+        Deserialize,
+    };
     return struct {
         const Self = @This();
         allocator: Allocator,
@@ -297,10 +302,16 @@ pub fn Frame(
         };
 
         /// Copies frame's `_payload_data` and returns serialized Extension and Application data
-        pub fn payload_data(self: Self) !PayloadData {
-            var copy = try self.allocator.dupe(u8, self._payload_data);
+        pub fn payload_data(self: *Self) Error!PayloadData {
+            var copy = self.allocator.dupe(u8, self._payload_data) catch |e| {
+                std.log.err("Failed to copy _payload_data: {}\n", .{e});
+                return error.Copy;
+            };
             const read_ctx = self.as_read_context();
-            const ext_read_result = try ExtData.read(copy, read_ctx);
+            const ext_read_result = ExtData.read(copy, read_ctx) catch |e| {
+                std.log.err("Failed to read {s}: {}\n", .{ @typeName(ExtData), e });
+                return error.Read;
+            };
 
             const read_amt = ext_read_result.amt;
             var ext_data: ?ExtData =
@@ -309,7 +320,10 @@ pub fn Frame(
                 ext_data = ExtData.from(ext_read_result.inner);
             }
 
-            const app_data = try AppData.deserialize(copy[read_amt..], self.allocator);
+            const app_data = AppData.deserialize(copy[read_amt..], self.allocator) catch |e| {
+                std.log.err("Failed to deserialize {s}: {}\n", .{ @typeName(AppData), e });
+                return error.Deserialize;
+            };
             return PayloadData{
                 ._source = copy,
                 .app_data = app_data,
@@ -537,6 +551,8 @@ pub fn Frame(
                 payload_size,
             });
             const size = if (mask == 1) payload_size + @bitSizeOf(MaskingKey) / 8 else payload_size;
+            var payload_buffer = std.ArrayList(u8).init(allocator);
+            defer payload_buffer.deinit();
             var rest_bytes = try allocator.alloc(u8, size);
             defer allocator.free(rest_bytes);
             const read_amt = try reader.read(rest_bytes);
@@ -552,7 +568,9 @@ pub fn Frame(
                 }
             };
             std.log.debug("masking key: {any}\n", .{masking_key});
-            var payload = if (masking_key) |_| rest_bytes[4..] else rest_bytes;
+            try if (masking_key) |_| payload_buffer.appendSlice(rest_bytes[4..]) else payload_buffer.appendSlice(rest_bytes);
+
+            var payload = try payload_buffer.toOwnedSlice();
             if (masking_key) |k| {
                 mask_data(k, &payload);
             }

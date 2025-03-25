@@ -27,7 +27,7 @@ fn BytesTestCase(
 
         fn run_test(case: Self, allocator: std.mem.Allocator) !void {
             std.log.warn("TESTING {s}\n", .{@typeName(AppData)});
-            const frame = try MyFrame.init(.{
+            var frame = try MyFrame.init(.{
                 .fin = case.fin,
                 .opcode = case.opcode,
                 .app_data = case.app_data,
@@ -112,7 +112,7 @@ fn JsonTestCase(
 
         fn run_test(case: Self) !void {
             std.log.warn("TESTING {s}\n", .{@typeName(AppData)});
-            const frame = try MyFrame.init(.{
+            var frame = try MyFrame.init(.{
                 .fin = case.fin,
                 .opcode = case.opcode,
                 .app_data = case.app_data,

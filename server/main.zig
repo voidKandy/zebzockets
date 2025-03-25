@@ -18,6 +18,7 @@ const log = std.log.scoped(.warn);
 
 const Server =
     zz.server.Server(zz.frame.TransparentAppData, zz.frame.NullExt);
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
